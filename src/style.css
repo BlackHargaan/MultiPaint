@@ -1,0 +1,238 @@
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 14px;
+  background: #1b1d21;
+  color: #d8dadf;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+#topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  background: #25282e;
+  border-bottom: 1px solid #14161a;
+  flex-wrap: wrap;
+}
+
+#logo {
+  font-weight: 700;
+  font-size: 16px;
+  color: #6fc3ff;
+  margin-right: 8px;
+}
+
+#spacer { flex: 1; }
+
+button {
+  background: #34383f;
+  color: #d8dadf;
+  border: 1px solid #44484f;
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 13px;
+}
+button:hover { background: #3f444c; }
+
+select {
+  background: #34383f;
+  color: #d8dadf;
+  border: 1px solid #44484f;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 13px;
+}
+
+#tools, #region-ops, #line-actions { display: flex; gap: 4px; }
+#line-actions button { font-size: 12px; padding: 5px 9px; }
+#btn-line-paint { border-color: #6fc3ff; }
+#btn-line-block { border-color: #c060ff; }
+#region-ops {
+  padding-left: 10px;
+  border-left: 1px solid #3a3f46;
+}
+#region-ops button { font-size: 12px; padding: 5px 9px; }
+.tool.active {
+  background: #2a5d8f;
+  border-color: #6fc3ff;
+  color: #fff;
+}
+
+#btn-export {
+  background: #2e7d46;
+  border-color: #3a9d58;
+  color: #fff;
+  font-weight: 600;
+}
+#btn-export:hover { background: #36934f; }
+
+#topbar label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #9aa0a8;
+  font-size: 12px;
+}
+#topbar input[type="range"] { width: 130px; }
+
+main {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+#viewport {
+  flex: 1;
+  position: relative;
+  min-width: 0;
+}
+#viewport canvas { display: block; }
+
+#sidebar {
+  width: 270px;
+  background: #25282e;
+  border-left: 1px solid #14161a;
+  padding: 12px;
+  overflow-y: auto;
+}
+#sidebar h3 { margin: 0 0 10px; font-size: 13px; text-transform: uppercase; color: #9aa0a8; }
+
+.group-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  margin-bottom: 4px;
+}
+.group-row:hover { background: #2d3138; }
+.group-row.active { border-color: #6fc3ff; background: #2a3a4a; }
+
+.group-row .slot {
+  font-weight: 700;
+  width: 18px;
+  text-align: center;
+  color: #9aa0a8;
+}
+.group-row input[type="color"] {
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+}
+.group-row input[type="text"] {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  color: #d8dadf;
+  font-size: 13px;
+}
+.group-row input[type="text"]:focus { outline: 1px solid #44484f; border-radius: 3px; }
+.group-row .del {
+  background: none;
+  border: none;
+  color: #777;
+  padding: 2px 6px;
+}
+.group-row .del:hover { color: #ff7b7b; }
+
+#btn-add-group { width: 100%; margin-top: 6px; }
+
+#sidebar h3:not(:first-child) { margin-top: 18px; }
+#projection button {
+  width: 100%;
+  margin-bottom: 6px;
+  text-align: left;
+}
+#projection button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.proj-opt {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #9aa0a8;
+  margin: 6px 0;
+}
+.proj-opt input[type="range"] { flex: 1; min-width: 0; }
+.proj-select { flex: 1; min-width: 0; padding: 4px 6px; font-size: 12px; }
+
+.proj-sep {
+  border: none;
+  border-top: 1px solid #3a3f46;
+  margin: 12px 0 8px;
+}
+
+#view-cluster {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  display: flex;
+  gap: 3px;
+  z-index: 5;
+}
+#view-cluster button {
+  font-size: 11px;
+  padding: 4px 8px;
+  background: rgba(37, 40, 46, 0.85);
+}
+#view-cluster button:hover { background: #3f444c; }
+#btn-ortho.active {
+  background: #2a5d8f;
+  border-color: #6fc3ff;
+  color: #fff;
+}
+
+#decal-overlay {
+  position: absolute;
+  display: none;
+  border: 1px dashed #6fc3ff;
+  cursor: move;
+  z-index: 10;
+  user-select: none;
+  touch-action: none;
+}
+#decal-overlay img {
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  display: block;
+}
+#decal-handle {
+  position: absolute;
+  right: -7px;
+  bottom: -7px;
+  width: 14px;
+  height: 14px;
+  background: #6fc3ff;
+  border-radius: 3px;
+  cursor: nwse-resize;
+}
+
+.hint { font-size: 11px; color: #777e87; line-height: 1.5; }
+
+#statusbar {
+  padding: 4px 12px;
+  background: #25282e;
+  border-top: 1px solid #14161a;
+  font-size: 12px;
+  color: #9aa0a8;
+}

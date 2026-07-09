@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MultiPaint — multicolor model painter</title>
+  </head>
+  <body>
+    <div id="app">
+      <header id="topbar">
+        <span id="logo">MultiPaint</span>
+        <button id="btn-open">Open STL / 3MF</button>
+        <input type="file" id="file-input" accept=".stl,.3mf" hidden />
+        <div id="tools">
+          <button class="tool" data-tool="brush" title="Paint triangles under a round brush (B)">Brush</button>
+          <button class="tool" data-tool="fill" title="Flood fill across smooth surfaces, stops at sharp edges (F)">Smart Fill</button>
+          <button class="tool" data-tool="island" title="Fill an entire connected island (I)">Island Fill</button>
+          <button class="tool" data-tool="blocker" title="Paint barriers that fills cannot cross; Alt-drag erases (X)">Blocker</button>
+          <button class="tool" data-tool="line" title="Click to drop points, then commit the stripe as paint or blockers; Backspace removes the last point (L)">Line</button>
+        </div>
+        <label id="line-width-wrap" title="Stripe width in mm">Line width
+          <input type="range" id="line-width" data-default="3" min="0.2" max="20" step="0.2" value="3" />
+          <span id="line-width-val">3</span>
+        </label>
+        <div id="line-actions">
+          <button id="btn-line-paint" title="Paint the line with the active color">Paint line</button>
+          <button id="btn-line-block" title="Turn the line into fill blockers">Block line</button>
+          <button id="btn-line-clear" title="Discard the line points">Clear</button>
+        </div>
+        <div id="region-ops">
+          <button id="btn-grow" title="Expand the active group's region by one triangle ring (+)">Grow</button>
+          <button id="btn-shrink" title="Contract the active group's region by one triangle ring (-)">Shrink</button>
+          <button id="btn-despeckle" title="Absorb tiny leftover paint islands into their surrounding color">Despeckle</button>
+          <button id="btn-clear-blockers" title="Remove all blockers">Clear blockers</button>
+        </div>
+        <label id="brush-size-wrap">Brush size
+          <input type="range" id="brush-size" data-default="5" min="0.5" max="30" step="0.5" value="5" />
+          <span id="brush-size-val">5</span>
+        </label>
+        <label id="through-wrap" title="Paint everything inside the brush sphere, including hidden back sides of thin walls">
+          <input type="checkbox" id="brush-through" /> Through
+        </label>
+        <label id="stroke-subdiv-wrap" title="Subdivide triangles along the stroke edge so brush and line boundaries come out crisp on coarse meshes. Rebuilds geometry on each stroke — clears undo history.">
+          <input type="checkbox" id="stroke-subdiv" /> Crisp edges
+        </label>
+        <label id="fill-angle-wrap" title="Starting fill reach — click and drag left/right to scrub it live">Fill reach
+          <input type="range" id="fill-angle" data-default="30" min="1" max="120" step="1" value="30" />
+          <span id="fill-angle-val">30°</span>
+        </label>
+        <span id="spacer"></span>
+        <select id="export-mode" title="How colors are written into the 3MF">
+          <option value="painted" selected>Painted model (recommended)</option>
+          <option value="parts">Separate parts</option>
+        </select>
+        <button id="btn-export" title="Export 3MF for Orca/Bambu">Export 3MF</button>
+      </header>
+      <main>
+        <div id="viewport">
+          <div id="view-cluster">
+            <button data-view="home" title="Default three-quarter view (Home / Numpad 0)">Home</button>
+            <button data-view="front" title="Front view">Front</button>
+            <button data-view="back" title="Back view">Back</button>
+            <button data-view="left" title="Left view">Left</button>
+            <button data-view="right" title="Right view">Right</button>
+            <button data-view="top" title="Top view">Top</button>
+            <button data-view="bottom" title="Bottom view">Bottom</button>
+            <button id="btn-ortho" title="Toggle orthographic / perspective projection">Ortho</button>
+          </div>
+          <div id="decal-overlay">
+            <img id="decal-img" alt="" draggable="false" />
+            <div id="decal-handle" title="Drag to resize"></div>
+          </div>
+        </div>
+        <aside id="sidebar">
+          <h3>Filament groups</h3>
+          <div id="groups"></div>
+          <button id="btn-add-group">+ Add group</button>
+          <p class="hint">Click a group to paint with it. The number is the
+          filament slot it will be assigned to in the slicer.</p>
+          <h3>Image projection</h3>
+          <div id="projection">
+            <button id="btn-decal-load">Load decal image…</button>
+            <input type="file" id="decal-file" accept="image/png,image/jpeg,image/webp" hidden />
+            <div id="decal-controls" style="display:none">
+              <label class="proj-opt" title="Remove the image's solid background (flood-filled from the borders) so only the subject projects. Non-destructive — toggle off to restore.">
+                <input type="checkbox" id="decal-bg-remove" /> Remove background
+              </label>
+              <label class="proj-opt" id="bg-tol-wrap" style="display:none" title="How different a pixel may be from the border color and still count as background">BG tolerance
+                <input type="range" id="decal-bg-tol" data-default="40" min="5" max="120" step="5" value="40" />
+                <span id="decal-bg-tol-val">40</span>
+              </label>
+              <label class="proj-opt" id="bg-edge-wrap" style="display:none" title="Positive trims halo fringes off the subject's edge; negative keeps more of it">Edge trim
+                <input type="range" id="decal-bg-edge" data-default="0" min="-6" max="6" step="1" value="0" />
+                <span id="decal-bg-edge-val">0</span>
+              </label>
+              <label class="proj-opt">Scale
+                <input type="range" id="decal-scale" data-default="100" min="10" max="400" step="1" value="100" />
+                <span id="decal-scale-val">100%</span>
+              </label>
+              <label class="proj-opt">Rotation
+                <input type="range" id="decal-rot" data-default="0" min="-180" max="180" step="1" value="0" />
+                <span id="decal-rot-val">0°</span>
+              </label>
+              <label class="proj-opt">Opacity
+                <input type="range" id="decal-opacity" data-default="70" min="10" max="100" step="1" value="70" />
+              </label>
+              <label class="proj-opt" title="Split triangles along the decal's color boundaries for crisper edges than the mesh tessellation. Note: subdividing clears the undo history.">Detail
+                <select id="decal-subdiv" class="proj-select">
+                  <option value="0">Off — paint whole triangles</option>
+                  <option value="2">Fine (2 rounds)</option>
+                  <option value="3" selected>Finer (3 rounds)</option>
+                  <option value="4">Finest (4 rounds)</option>
+                  <option value="5">Ultra (5 rounds — small text)</option>
+                </select>
+              </label>
+              <button id="btn-decal-apply">Apply decal</button>
+              <button id="btn-decal-remove">Remove decal</button>
+            </div>
+            <p class="hint">Position the image over the model (drag it, corner
+            handle or scroll to resize), orbit the model behind it, then Apply.
+            Transparent PNG areas are skipped — perfect for logo decals.</p>
+            <hr class="proj-sep" />
+            <p class="hint">Or the snapshot round-trip (for AI-editing an exact
+            view):</p>
+            <button id="btn-proj-snapshot">1. Save view snapshot</button>
+            <button id="btn-proj-return" disabled title="Move the camera back to exactly where the snapshot was taken">↩ Return to snapshot view</button>
+            <button id="btn-proj-import" disabled>2. Import edited image</button>
+            <input type="file" id="proj-file" accept="image/png,image/jpeg,image/webp" hidden />
+            <label class="proj-opt" title="Automatically add filament groups for the image's dominant colors, so the projection reproduces the image. Off = snap only to your existing groups.">
+              <input type="checkbox" id="proj-auto-colors" checked /> Create colors from image
+            </label>
+            <label class="proj-opt" title="Brighten dark areas so a saturated color rendered too dark reads as that color. Leave OFF for logos with black areas — ON can turn compression noise in dark regions into colored speckle.">
+              <input type="checkbox" id="proj-deshade" /> Recover dark colors
+            </label>
+            <label class="proj-opt" title="Max color distance for matching a pixel to a filament color">Color tolerance
+              <input type="range" id="proj-tolerance" data-default="60" min="10" max="150" step="5" value="60" />
+              <span id="proj-tolerance-val">60</span>
+            </label>
+            <label class="proj-opt" title="Only apply pixels that differ from the saved snapshot. Turn OFF for AI-regenerated images where every pixel shifts slightly.">
+              <input type="checkbox" id="proj-changed-only" checked /> Only changed pixels
+            </label>
+            <p class="hint">Save a snapshot, paint on it in any editor (or ask
+            an AI to recolor it) using your filament colors, then import it —
+            the colors project back onto everything visible from that view.
+            Don't crop or rotate the image; resizing is fine.</p>
+          </div>
+        </aside>
+      </main>
+      <div id="statusbar">Open an STL to get started.</div>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
