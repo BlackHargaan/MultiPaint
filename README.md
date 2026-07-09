@@ -1,8 +1,10 @@
 # MultiPaint
 
 Paint 3D models for multicolor printing with better tools than the slicer
-gives you, then export a 3MF that imports into Orca Slicer / Bambu Studio as
+gives you, then export a 3MF that imports into a slicer as
 one object with one part per color — with filament slots already assigned.
+
+Created after purchasing the Snapmaker U1 and needing better ways to paint models that weren't designed with that in mind. 
 
 ## Run it
 
@@ -86,7 +88,7 @@ taken — handy for checking the projection result or re-shooting.
 
 Two ways to paint in 2D and apply in 3D (sidebar, bottom section):
 
-**Decal overlay (interactive, Primed3D-style):**
+**Decal overlay (interactive, Primed3D-style, Recommended):** 
 
 1. **Load decal image…** — the image floats semi-transparent over the
    viewport. Drag to position, corner handle / scroll wheel / Scale slider to
@@ -115,7 +117,7 @@ Two ways to paint in 2D and apply in 3D (sidebar, bottom section):
    export. Note: subdividing rebuilds the mesh and clears the undo history;
    set Detail to "Off" for a normal undoable apply.
 
-**Snapshot round-trip (for AI-editing an exact view):**
+**Snapshot round-trip (for AI-editing an exact view, WIP):**
 
 1. Frame the model, then **Save view snapshot** — downloads a PNG and freezes
    the camera pose (you can keep orbiting/painting afterwards). The snapshot
