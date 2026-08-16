@@ -354,6 +354,114 @@ export class Painter {
     return count;
   }
 
+  /**
+   * Shortest path across the surface from one hit to another, as a chain of
+   * triangles: Dijkstra over the dual graph (nodes = triangles, edge weight =
+   * centroid-to-centroid distance). The path rides the surface, so it never
+   * tunnels through the solid the way a straight 3D chord does on a curve.
+   * Returns { triChain, polyPoints } where polyPoints is a surface-hugging
+   * polyline (start hit, shared-edge midpoints, end hit) for preview/refine,
+   * or null when the two hits sit on disconnected shells.
+   */
+  surfacePath(triA, pointA, triB, pointB) {
+    if (!this.mesh) return null;
+    if (triA === triB) {
+      return { triChain: [triA], polyPoints: [pointA.clone(), pointB.clone()] };
+    }
+    const N = this.triCount;
+    const cen = this.triCentroids;
+    const dist = new Float32Array(N).fill(Infinity);
+    const prev = new Int32Array(N).fill(-1);
+    const done = new Uint8Array(N);
+    const heap = new MinHeap(N);
+    dist[triA] = 0;
+    heap.push(0, triA);
+    while (heap.size) {
+      const [d, t] = heap.pop();
+      if (done[t]) continue;
+      done[t] = 1;
+      if (t === triB) break;
+      for (let e = 0; e < 3; e++) {
+        const n = this.adjacency[t * 3 + e];
+        if (n < 0 || done[n]) continue;
+        const dx = cen[t * 3] - cen[n * 3];
+        const dy = cen[t * 3 + 1] - cen[n * 3 + 1];
+        const dz = cen[t * 3 + 2] - cen[n * 3 + 2];
+        const nd = d + Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (nd < dist[n]) { dist[n] = nd; prev[n] = t; heap.push(nd, n); }
+      }
+    }
+    if (!isFinite(dist[triB])) return null; // disconnected shells
+    const triChain = [];
+    for (let t = triB; t !== -1; t = prev[t]) triChain.push(t);
+    triChain.reverse();
+    const polyPoints = [pointA.clone()];
+    for (let i = 0; i < triChain.length - 1; i++) {
+      const m = this._sharedEdgeMidpoint(triChain[i], triChain[i + 1]);
+      if (m) polyPoints.push(m);
+    }
+    polyPoints.push(pointB.clone());
+    return { triChain, polyPoints };
+  }
+
+  /** Midpoint of the edge shared by adjacent triangles t and n (world space). */
+  _sharedEdgeMidpoint(t, n) {
+    const pos = this.mesh.geometry.attributes.position;
+    for (let e = 0; e < 3; e++) {
+      if (this.adjacency[t * 3 + e] === n) {
+        const a = t * 3 + e, b = t * 3 + ((e + 1) % 3);
+        return new THREE.Vector3(
+          (pos.getX(a) + pos.getX(b)) / 2,
+          (pos.getY(a) + pos.getY(b)) / 2,
+          (pos.getZ(a) + pos.getZ(b)) / 2
+        );
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Paint (or block) a stripe hugging the surface: every triangle within
+   * geodesic distance width/2 of the seed triangle chain, measured by walking
+   * the adjacency graph. Unlike paintPolyline this can't reach the far side of
+   * a thin wall, because distance is accumulated along the surface. Caller
+   * manages the stroke (begin/endStroke).
+   */
+  paintSurfaceStripe(triChain, width, asBlocker = false) {
+    if (!this.mesh || !triChain.length) return 0;
+    const limit = width / 2;
+    const cen = this.triCentroids;
+    const dist = new Float32Array(this.triCount).fill(Infinity);
+    const painted = new Uint8Array(this.triCount);
+    const heap = new MinHeap(triChain.length + 16);
+    for (const t of triChain) {
+      if (dist[t] !== 0) { dist[t] = 0; heap.push(0, t); }
+    }
+    const group = this.activeGroup;
+    let count = 0;
+    while (heap.size) {
+      const [d, t] = heap.pop();
+      if (d > dist[t]) continue;
+      if (!painted[t]) {
+        painted[t] = 1;
+        if (asBlocker) this._setBlocked(t, 1);
+        else this._assign(t, group);
+        count++;
+      }
+      for (let e = 0; e < 3; e++) {
+        const n = this.adjacency[t * 3 + e];
+        if (n < 0) continue;
+        const dx = cen[t * 3] - cen[n * 3];
+        const dy = cen[t * 3 + 1] - cen[n * 3 + 1];
+        const dz = cen[t * 3 + 2] - cen[n * 3 + 2];
+        const nd = d + Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (nd <= limit && nd < dist[n]) { dist[n] = nd; heap.push(nd, n); }
+      }
+    }
+    this.mesh.geometry.attributes.color.needsUpdate = true;
+    return count;
+  }
+
   /** Paint (or erase, when erase=true) fill blockers under the brush. */
   blockerBrush(point, radius, seedTri, erase, through = false) {
     if (!this.mesh) return;

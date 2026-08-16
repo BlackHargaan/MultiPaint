@@ -314,23 +314,26 @@ export class Viewer {
     return hit;
   }
 
-  /** Show the polyline tool's points and segments at true stripe width. */
-  setPolylinePreview(points, width, colorHex) {
+  /**
+   * Show the polyline tool at true stripe width. `clickPoints` are the
+   * user-dropped points (marked with a sphere each); `drapePoints` is the
+   * centerline the stripe follows — the surface-hugging drape in Surface mode,
+   * or the same click points for a straight chord. Falls back to clickPoints
+   * when no drape is supplied.
+   */
+  setPolylinePreview(clickPoints, drapePoints, width, colorHex) {
     this.clearPolylinePreview();
-    if (!points.length) return;
+    if (!clickPoints.length) return;
+    const path = drapePoints && drapePoints.length ? drapePoints : clickPoints;
     const r = width / 2;
     const mat = new THREE.MeshBasicMaterial({
       color: colorHex, transparent: true, opacity: 0.55, depthTest: false,
     });
     const sphereGeo = new THREE.SphereGeometry(1, 16, 12);
     const up = new THREE.Vector3(0, 1, 0);
-    for (let i = 0; i < points.length; i++) {
-      const dot = new THREE.Mesh(sphereGeo, mat);
-      dot.position.copy(points[i]);
-      dot.scale.setScalar(r);
-      this.lineGroup.add(dot);
-      if (i === 0) continue;
-      const a = points[i - 1], b = points[i];
+    // stripe tube along the (possibly draped) centerline
+    for (let i = 1; i < path.length; i++) {
+      const a = path[i - 1], b = path[i];
       const dir = new THREE.Vector3().subVectors(b, a);
       const len = dir.length();
       if (len < 1e-6) continue;
@@ -338,6 +341,13 @@ export class Viewer {
       cyl.position.copy(a).addScaledVector(dir, 0.5);
       cyl.quaternion.setFromUnitVectors(up, dir.normalize());
       this.lineGroup.add(cyl);
+    }
+    // solid markers only at the points the user actually dropped
+    for (const p of clickPoints) {
+      const dot = new THREE.Mesh(sphereGeo, mat);
+      dot.position.copy(p);
+      dot.scale.setScalar(r);
+      this.lineGroup.add(dot);
     }
   }
 

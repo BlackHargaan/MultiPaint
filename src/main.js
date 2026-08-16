@@ -19,7 +19,9 @@ let tool = 'brush';
 let brushRadius = 5;
 let fillAngle = 30;
 let lineWidth = 3;
-let linePoints = [];
+let linePoints = [];   // [{ point: Vector3, tri: faceIndex }] the user dropped
+let lineDrape = [];    // cached surface-hugging centerline for preview/commit
+let lineChain = null;  // cached geodesic triangle chain (Surface mode)
 let modelName = 'model';
 
 // active pointer interaction: null | 'brush' | 'blocker' | 'scrub'
@@ -107,6 +109,7 @@ function setTool(name) {
     isBrushy || name === 'line' ? '' : 'none';
   document.getElementById('fill-angle-wrap').style.display = name === 'fill' ? '' : 'none';
   document.getElementById('line-width-wrap').style.display = name === 'line' ? '' : 'none';
+  document.getElementById('line-surface-wrap').style.display = name === 'line' ? '' : 'none';
   document.getElementById('line-actions').style.display = name === 'line' ? '' : 'none';
   if (name === 'brush') setStatus('Brush: drag to paint, Alt-drag to erase back to base.');
   if (name === 'blocker') setStatus('Blocker: drag to paint fill barriers, Alt-drag to erase them.');
@@ -132,26 +135,71 @@ document.getElementById('line-width').addEventListener('input', (e) => {
 
 // ---- line tool ----
 
+function surfaceMode() {
+  return document.getElementById('line-surface').checked;
+}
+
+/**
+ * Recompute the stripe centerline from the dropped points. In Surface mode
+ * each segment between consecutive points is a geodesic drape over the mesh
+ * (so it can't tunnel under a curve); in Straight mode it's the raw chord.
+ * Caches the draped polyline and the geodesic triangle chain for commit.
+ */
+function rebuildLinePath() {
+  const surface = surfaceMode();
+  if (!surface || linePoints.length < 2 || !painter.mesh) {
+    lineDrape = linePoints.map((p) => p.point.clone());
+    lineChain = null;
+    return;
+  }
+  const drape = [];
+  const chain = [];
+  for (let i = 0; i < linePoints.length - 1; i++) {
+    const a = linePoints[i], b = linePoints[i + 1];
+    const sp = painter.surfacePath(a.tri, a.point, b.tri, b.point);
+    if (!sp) {
+      // disconnected shells — fall back to a straight chord for this segment
+      if (!drape.length) drape.push(a.point.clone());
+      drape.push(b.point.clone());
+      continue;
+    }
+    const start = drape.length ? 1 : 0; // skip the shared junction point
+    for (let k = start; k < sp.polyPoints.length; k++) drape.push(sp.polyPoints[k]);
+    for (const t of sp.triChain) {
+      if (!chain.length || chain[chain.length - 1] !== t) chain.push(t);
+    }
+  }
+  lineDrape = drape;
+  lineChain = chain;
+}
+
 function refreshLinePreview() {
   const colorHex = parseInt(painter.groups[painter.activeGroup].color.slice(1), 16);
-  viewer.setPolylinePreview(linePoints, lineWidth, colorHex);
+  viewer.setPolylinePreview(
+    linePoints.map((p) => p.point), lineDrape, lineWidth, colorHex);
 }
 
 function clearLine() {
   linePoints = [];
+  lineDrape = [];
+  lineChain = null;
   viewer.clearPolylinePreview();
 }
 
 async function commitLine(asBlocker) {
   if (!painter.mesh || !linePoints.length || refining) return;
+  rebuildLinePath();
   if (document.getElementById('stroke-subdiv').checked) {
     refining = true;
     try {
-      await painter.refineStroke(linePoints, lineWidth / 2, {
+      // subdivision rebuilds the mesh, so the geodesic chain is invalidated;
+      // the draped polyline is on the surface, so a straight-segment repaint of
+      // it no longer tunnels
+      await painter.refineStroke(lineDrape, lineWidth / 2, {
         rounds: 3,
         onProgress: (f) => setStatus(`Refining line edges — ${Math.round(f * 100)}%…`),
       });
-      const n = painter.paintPolyline(linePoints, lineWidth, asBlocker);
+      const n = painter.paintPolyline(lineDrape, lineWidth, asBlocker);
       setStatus(`${asBlocker ? 'Blocked' : 'Painted'} ${n} triangles along the line with crisp edges — mesh now ${painter.triCount.toLocaleString()} triangles (undo history cleared).`);
     } catch (err) {
       console.error(err);
@@ -161,7 +209,9 @@ async function commitLine(asBlocker) {
     }
   } else {
     painter.beginStroke();
-    const n = painter.paintPolyline(linePoints, lineWidth, asBlocker);
+    const n = (surfaceMode() && lineChain && lineChain.length)
+      ? painter.paintSurfaceStripe(lineChain, lineWidth, asBlocker)
+      : painter.paintPolyline(lineDrape, lineWidth, asBlocker);
     painter.endStroke();
     setStatus(asBlocker
       ? `Blocked ${n} triangles along the line.`
@@ -169,6 +219,14 @@ async function commitLine(asBlocker) {
   }
   clearLine();
 }
+
+document.getElementById('line-surface').addEventListener('change', () => {
+  rebuildLinePath();
+  refreshLinePreview();
+  setStatus(surfaceMode()
+    ? 'Line: stripe clings to the surface between points.'
+    : 'Line: straight chords between points (may cut under curves).');
+});
 
 document.getElementById('btn-line-paint').addEventListener('click', () => commitLine(false));
 document.getElementById('btn-line-block').addEventListener('click', () => commitLine(true));
@@ -559,6 +617,7 @@ window.addEventListener('keydown', (e) => {
   if (k === 'l') setTool('line');
   if (e.key === 'Backspace' && tool === 'line' && linePoints.length) {
     linePoints.pop();
+    rebuildLinePath();
     refreshLinePreview();
     setStatus(`Removed last point — ${linePoints.length} left.`);
     e.preventDefault();
@@ -597,7 +656,8 @@ canvas.addEventListener('pointerdown', (e) => {
   const hit = viewer.pick(e);
   if (!hit) return;
   if (tool === 'line') {
-    linePoints.push(hit.point.clone());
+    linePoints.push({ point: hit.point.clone(), tri: hit.faceIndex });
+    rebuildLinePath();
     refreshLinePreview();
     setStatus(`Line: ${linePoints.length} point(s). Commit with "Paint line" or "Block line".`);
     return;

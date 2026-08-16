@@ -52,11 +52,16 @@ taken — handy for checking the projection result or re-shooting.
 - **Brush** — paints triangles within a radius, walking the surface from the
   hit point so it never bleeds through thin walls onto the far side. Alt-drag
   erases back to the base color.
-- **Line** — click to drop points connected by straight segments (previewed
-  as a translucent capsule chain at true width, like a Blender spline).
-  Adjust *Line width* any time, Backspace removes the last point, then commit
-  with **Paint line** (active color) or **Block line** (fill barrier) — the
-  latter is ideal for fencing off an emblem before filling it.
+- **Line** — click to drop points connected along the surface (previewed as a
+  translucent capsule chain at true width, like a Blender spline). With **Cling
+  to surface** on (default) each segment is a geodesic path draped over the
+  mesh between the two points, so the stripe follows curvature instead of
+  cutting a straight chord under the model — the fix for lines that used to
+  dive under faces on curved regions when the points were far apart. Turn it
+  off for a straight 3D chord (e.g. to bridge a gap). Adjust *Line width* any
+  time, Backspace removes the last point, then commit with **Paint line**
+  (active color) or **Block line** (fill barrier) — the latter is ideal for
+  fencing off an emblem before filling it.
 - **Smart Fill** — scrubbable priority flood. Click to fill, then *keep the
   button held and drag right/left* to grow or shrink the fill in real time.
   The fill expands across the cheapest edges first: flat surface is free,
