@@ -5,6 +5,7 @@ import { exportMultiPart3MF, exportPainted3MF } from './export3mf.js';
 import { ProjectionSession, setDeshade } from './projection.js';
 import { removeBackground } from './imagebg.js';
 import { parse3MF } from './import3mf.js';
+import { rasterizeGlyphs, buildPlacements, buildTextClassifier } from './curvedtext.js';
 
 const viewer = new Viewer(document.getElementById('viewport'));
 const painter = new Painter();
@@ -148,6 +149,18 @@ function computeSegment(a, b) {
   // null = disconnected shells; fall back to a straight chord for this segment
   if (!sp) return { drape: [a.point.clone(), b.point.clone()], chain: null };
   return { drape: sp.polyPoints, chain: sp.triChain };
+}
+
+/** Concatenated surface-hugging drape through a list of {point, tri} hits. */
+function geodesicDrape(pts) {
+  if (pts.length < 2) return pts.map((p) => p.point.clone());
+  const drape = [];
+  for (let i = 0; i < pts.length - 1; i++) {
+    const seg = computeSegment(pts[i], pts[i + 1]);
+    const start = drape.length ? 1 : 0;
+    for (let k = start; k < seg.drape.length; k++) drape.push(seg.drape[k]);
+  }
+  return drape;
 }
 
 /**
@@ -518,9 +531,10 @@ document.getElementById('btn-text-create').addEventListener('click', async () =>
   const text = document.getElementById('text-input').value.trim();
   if (!text) return setStatus('Type some text first.');
   const family = document.getElementById('text-font').value || 'sans-serif';
-  const color = painter.groups[painter.activeGroup].color;
   // make sure the chosen font is actually loaded before we rasterize
   try { await document.fonts.load(`160px ${cssFontFamily(family)}`); } catch { /* generic/system font */ }
+  if (document.getElementById('text-wrap').checked) return startTextPlacement(text, family);
+  const color = painter.groups[painter.activeGroup].color;
   const canvas = buildTextCanvas(
     text, family,
     document.getElementById('text-bold').checked,
@@ -530,6 +544,101 @@ document.getElementById('btn-text-create').addEventListener('click', async () =>
   const bmp = await createImageBitmap(canvas);
   await presentDecal(bmp, canvas.toDataURL(),
     `Text decal created in "${painter.groups[painter.activeGroup].name}" — position it over the model, then Apply decal.`);
+});
+
+// ---- curved (per-glyph "use surface") text ----
+
+let textPlacing = false;
+let textPath = [];      // [{ point, tri }] baseline hits on the model
+let textLayout = null;  // pre-rasterized glyphs for the placement in progress
+
+document.getElementById('text-wrap').addEventListener('change', () => {
+  const on = document.getElementById('text-wrap').checked;
+  document.getElementById('text-height-wrap').style.display = on ? '' : 'none';
+  document.getElementById('text-detail-wrap').style.display = on ? '' : 'none';
+  document.getElementById('btn-text-create').textContent = on ? 'Place curved text…' : 'Create text decal';
+  document.getElementById('text-hint').textContent = on
+    ? 'Click points on the model to lay the text baseline (2+), then Apply. Each glyph projects in its own surface frame, so text wraps around cylinders. Detail (below) controls edge crispness.'
+    : 'Renders your text as a decal in the active filament color. Position it over the model, then Apply decal below. Works on flat and gently curved faces.';
+});
+
+function startTextPlacement(text, family) {
+  if (!painter.mesh) return setStatus('Open a model first.');
+  textLayout = rasterizeGlyphs(text, {
+    family,
+    bold: document.getElementById('text-bold').checked,
+    italic: document.getElementById('text-italic').checked,
+  });
+  textPlacing = true;
+  textPath = [];
+  document.getElementById('text-place-actions').style.display = '';
+  document.getElementById('btn-text-create').style.display = 'none';
+  viewer.clearPolylinePreview();
+  setStatus('Curved text: click points on the model to lay the baseline (2 or more), then "Apply curved text".');
+}
+
+function refreshTextBaseline() {
+  if (!textPlacing) return;
+  const heightMm = parseFloat(document.getElementById('text-height').value) || 10;
+  const colorHex = parseInt(painter.groups[painter.activeGroup].color.slice(1), 16);
+  viewer.setPolylinePreview(
+    textPath.map((p) => p.point), geodesicDrape(textPath), heightMm, colorHex);
+}
+
+function endTextPlacement() {
+  textPlacing = false;
+  textPath = [];
+  textLayout = null;
+  document.getElementById('text-place-actions').style.display = 'none';
+  document.getElementById('btn-text-create').style.display = '';
+  viewer.clearPolylinePreview();
+}
+
+document.getElementById('btn-text-cancel').addEventListener('click', () => {
+  endTextPlacement();
+  setStatus('Curved text cancelled.');
+});
+
+document.getElementById('btn-text-apply').addEventListener('click', async () => {
+  if (!textPlacing || textPath.length < 2) {
+    return setStatus('Click at least two points on the model for the text baseline.');
+  }
+  const heightMm = parseFloat(document.getElementById('text-height').value) || 10;
+  const drape = geodesicDrape(textPath);
+  const placements = buildPlacements(textLayout, drape, heightMm, painter.mesh, painter.triNormals);
+  if (!placements.length) return setStatus('No printable glyphs to place.');
+  const group = painter.activeGroup;
+  const { classify, inScope, triInScope } = buildTextClassifier(placements, group, heightMm);
+  const subdivide = parseInt(document.getElementById('text-subdiv').value, 10);
+  const layout = textLayout, path = textPath.slice();
+  document.getElementById('btn-text-apply').disabled = true;
+  setStatus('Applying curved text…');
+  try {
+    const applied = await painter.applyRegionPaint(classify, {
+      subdivide,
+      inScope,
+      triInScope,
+      // start phase-1 near the stroke width (~height/8), not the glyph height,
+      // so thin crossbars survive the boundary refinement
+      maxEdge: Math.max(0.6, heightMm * 0.22),
+      onProgress: (f, phase) => setStatus(`Applying curved text — ${phase || ''} ${Math.round(f * 100)}%…`),
+    });
+    if (applied === 0) {
+      setStatus('Curved text landed nothing — try a larger Height, a Detail level of Fine+, or points closer to the surface.');
+    } else {
+      setStatus(`Curved text applied: ${applied} triangles painted in "${painter.groups[group].name}"` +
+        (subdivide
+          ? ` — mesh now ${painter.triCount.toLocaleString()} triangles (undo history cleared).`
+          : ' (Ctrl+Z to undo).'));
+    }
+    endTextPlacement();
+  } catch (err) {
+    console.error(err);
+    setStatus(`Curved text failed: ${err.message}`);
+    textLayout = layout; textPath = path; // keep the placement so they can retry
+  } finally {
+    document.getElementById('btn-text-apply').disabled = false;
+  }
 });
 
 // ---- decal background removal (non-destructive: always from the original) ----
@@ -751,6 +860,12 @@ window.addEventListener('keydown', (e) => {
     e.preventDefault();
     return;
   }
+  if (e.key === 'Escape' && textPlacing) {
+    endTextPlacement();
+    setStatus('Curved text cancelled.');
+    e.preventDefault();
+    return;
+  }
   const k = e.key.toLowerCase();
   if (k === 'b') setTool('brush');
   if (k === 'f') setTool('fill');
@@ -808,6 +923,12 @@ canvas.addEventListener('pointerdown', (e) => {
   if (e.button !== 0 || !painter.mesh || refining) return;
   const hit = viewer.pick(e);
   if (!hit) return;
+  if (textPlacing) {
+    textPath.push({ point: hit.point.clone(), tri: hit.faceIndex });
+    refreshTextBaseline();
+    setStatus(`Curved text baseline: ${textPath.length} point(s). Add more or "Apply curved text".`);
+    return;
+  }
   if (tool === 'line') {
     lineRedo = []; // a fresh point starts a new branch
     linePoints.push({ point: hit.point.clone(), tri: hit.faceIndex });

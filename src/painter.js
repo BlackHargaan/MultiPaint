@@ -226,6 +226,42 @@ export class Painter {
     this.adoptRefined(refined.positions, refined.triGroup, refined.blocked);
   }
 
+  /**
+   * Paint every triangle a classifier claims. classify(x,y,z,nx,ny,nz) returns
+   * the group index to paint at a point (with that triangle's normal), or -1.
+   * With opts.subdivide > 0 the mesh is first conformingly refined along the
+   * classification boundary (so coarse/lathe meshes get crisp regions) — that
+   * rebuilds geometry and clears undo history, exactly like the decal Detail
+   * path; without it the paint is a single undoable stroke. Used by curved
+   * text, but deliberately generic. Returns the number of triangles painted.
+   */
+  async applyRegionPaint(classify, opts = {}) {
+    if (!this.mesh) return 0;
+    const { subdivide = 0, inScope, triInScope, minEdge, maxEdge, onProgress } = opts;
+    if (subdivide) {
+      const bb = this.mesh.geometry.boundingBox;
+      const diag = bb.min.distanceTo(bb.max);
+      const minEdgeVal = minEdge ?? Math.max(0.15, diag * 0.003);
+      const refined = await refineMesh(
+        this.mesh.geometry.attributes.position.array,
+        this.triGroup, this.blocked, classify,
+        { maxRounds: subdivide, minEdge: minEdgeVal, inScope, triInScope, maxEdge, onProgress }
+      );
+      this.adoptRefined(refined.positions, refined.triGroup, refined.blocked);
+    }
+    const cen = this.triCentroids, N = this.triNormals;
+    if (!subdivide) this.beginStroke();
+    let applied = 0;
+    for (let t = 0; t < this.triCount; t++) {
+      const g = classify(cen[t * 3], cen[t * 3 + 1], cen[t * 3 + 2],
+        N[t * 3], N[t * 3 + 1], N[t * 3 + 2]);
+      if (g >= 0) { this._assign(t, g); applied++; }
+    }
+    if (!subdivide) this.endStroke();
+    this.mesh.geometry.attributes.color.needsUpdate = true;
+    return applied;
+  }
+
   /** Swap the stored values of an undo/redo entry with the current state. */
   _applySwap(s) {
     for (const [t, v] of s.group) {

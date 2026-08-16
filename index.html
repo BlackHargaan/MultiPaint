@@ -94,11 +94,30 @@
                 <label title="Bold"><input type="checkbox" id="text-bold" /> Bold</label>
                 <label title="Italic"><input type="checkbox" id="text-italic" /> Italic</label>
               </div>
+              <label class="proj-opt" title="Wrap the text around the surface, projecting each glyph in its own surface tangent frame — for cylinders (mugs, coolers) where a flat decal would smear. You then click points on the model to lay the baseline.">
+                <input type="checkbox" id="text-wrap" /> Wrap on surface (per glyph)
+              </label>
+              <label class="proj-opt" id="text-height-wrap" style="display:none" title="Text (cap) height on the model, in millimeters">Height (mm)
+                <input type="number" id="text-height" min="1" max="200" step="0.5" value="10" />
+              </label>
+              <label class="proj-opt" id="text-detail-wrap" style="display:none" title="Split triangles along glyph edges for crisp letters on coarse or lathe meshes. Above Off, this rebuilds geometry and clears undo history.">Detail
+                <select id="text-subdiv" class="proj-select">
+                  <option value="0">Off — whole triangles</option>
+                  <option value="2">Fine (2 rounds)</option>
+                  <option value="3">Finer (3 rounds)</option>
+                  <option value="4" selected>Finest (4 rounds)</option>
+                  <option value="5">Ultra (5 rounds — small text)</option>
+                </select>
+              </label>
               <button id="btn-text-create">Create text decal</button>
-              <p class="hint">Renders your text as a decal in the active
-              filament color. Position it over the model (drag / scroll / corner
-              handle), then Apply decal below. Works on flat and gently curved
-              faces; per-glyph wrap around cylinders comes later.</p>
+              <div id="text-place-actions" style="display:none">
+                <button id="btn-text-apply">Apply curved text</button>
+                <button id="btn-text-cancel">Cancel</button>
+              </div>
+              <p class="hint" id="text-hint">Renders your text as a decal in the
+              active filament color. Position it over the model (drag / scroll /
+              corner handle), then Apply decal below. Works on flat and gently
+              curved faces.</p>
             </div>
             <div id="decal-controls" style="display:none">
               <label class="proj-opt" title="Remove the image's solid background (flood-filled from the borders) so only the subject projects. Non-destructive — toggle off to restore.">
