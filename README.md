@@ -39,8 +39,8 @@ remembered between sessions automatically.
 | `Home` / Numpad `0` | Home (three-quarter) view |
 | Numpad `1`/`3`/`7` | Front / Right / Top view (`Ctrl` for Back / Left / Bottom) |
 | Numpad `5` | Toggle orthographic / perspective |
-| `Ctrl+Z` | Undo stroke |
-| `Ctrl+Y` / `Ctrl+Shift+Z` | Redo stroke |
+| `Ctrl+Z` | Undo stroke — or, while placing a line, remove the last point |
+| `Ctrl+Y` / `Ctrl+Shift+Z` | Redo stroke — or restore a removed line point |
 
 View preset buttons (Front/Back/Left/Right/Top/Bottom + Ortho) sit in the
 top-left corner of the viewport. After saving a snapshot, **↩ Return to
@@ -59,9 +59,9 @@ taken — handy for checking the projection result or re-shooting.
   cutting a straight chord under the model — the fix for lines that used to
   dive under faces on curved regions when the points were far apart. Turn it
   off for a straight 3D chord (e.g. to bridge a gap). Adjust *Line width* any
-  time, Backspace removes the last point, then commit with **Paint line**
-  (active color) or **Block line** (fill barrier) — the latter is ideal for
-  fencing off an emblem before filling it.
+  time; Backspace or `Ctrl+Z` removes the last point and `Ctrl+Y` restores it,
+  then commit with **Paint line** (active color) or **Block line** (fill
+  barrier) — the latter is ideal for fencing off an emblem before filling it.
 - **Smart Fill** — scrubbable priority flood. Click to fill, then *keep the
   button held and drag right/left* to grow or shrink the fill in real time.
   The fill expands across the cheapest edges first: flat surface is free,

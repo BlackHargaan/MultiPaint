@@ -20,8 +20,11 @@ let brushRadius = 5;
 let fillAngle = 30;
 let lineWidth = 3;
 let linePoints = [];   // [{ point: Vector3, tri: faceIndex }] the user dropped
+let lineRedo = [];     // points removed by undo, awaiting redo
 let lineDrape = [];    // cached surface-hugging centerline for preview/commit
 let lineChain = null;  // cached geodesic triangle chain (Surface mode)
+let lineAllGeodesic = false; // false if any segment fell back to a straight chord
+let segCache = [];     // per-segment { drape, chain }, reused across point edits
 let modelName = 'model';
 
 // active pointer interaction: null | 'brush' | 'blocker' | 'scrub'
@@ -139,38 +142,73 @@ function surfaceMode() {
   return document.getElementById('line-surface').checked;
 }
 
+/** Geodesic (or straight-fallback) path for one segment a→b. */
+function computeSegment(a, b) {
+  const sp = painter.surfacePath(a.tri, a.point, b.tri, b.point);
+  // null = disconnected shells; fall back to a straight chord for this segment
+  if (!sp) return { drape: [a.point.clone(), b.point.clone()], chain: null };
+  return { drape: sp.polyPoints, chain: sp.triChain };
+}
+
 /**
  * Recompute the stripe centerline from the dropped points. In Surface mode
  * each segment between consecutive points is a geodesic drape over the mesh
  * (so it can't tunnel under a curve); in Straight mode it's the raw chord.
- * Caches the draped polyline and the geodesic triangle chain for commit.
+ * Per-segment results are cached in segCache — points are only ever added or
+ * removed at the tail, so only the new tail segment runs a fresh Dijkstra;
+ * the rest are reused, which keeps big meshes responsive as points pile up.
+ * Sets lineDrape, lineChain, and lineAllGeodesic (false if any segment fell
+ * back to a straight chord — commit then paints the drape directly).
  */
 function rebuildLinePath() {
   const surface = surfaceMode();
   if (!surface || linePoints.length < 2 || !painter.mesh) {
     lineDrape = linePoints.map((p) => p.point.clone());
     lineChain = null;
+    lineAllGeodesic = false;
+    segCache = [];
     return;
+  }
+  const need = linePoints.length - 1;
+  if (segCache.length > need) segCache.length = need; // a point was removed
+  for (let i = 0; i < need; i++) {
+    if (!segCache[i]) segCache[i] = computeSegment(linePoints[i], linePoints[i + 1]);
   }
   const drape = [];
   const chain = [];
-  for (let i = 0; i < linePoints.length - 1; i++) {
-    const a = linePoints[i], b = linePoints[i + 1];
-    const sp = painter.surfacePath(a.tri, a.point, b.tri, b.point);
-    if (!sp) {
-      // disconnected shells — fall back to a straight chord for this segment
-      if (!drape.length) drape.push(a.point.clone());
-      drape.push(b.point.clone());
-      continue;
-    }
+  let allGeodesic = true;
+  for (const seg of segCache) {
     const start = drape.length ? 1 : 0; // skip the shared junction point
-    for (let k = start; k < sp.polyPoints.length; k++) drape.push(sp.polyPoints[k]);
-    for (const t of sp.triChain) {
-      if (!chain.length || chain[chain.length - 1] !== t) chain.push(t);
+    for (let k = start; k < seg.drape.length; k++) drape.push(seg.drape[k]);
+    if (seg.chain) {
+      for (const t of seg.chain) {
+        if (!chain.length || chain[chain.length - 1] !== t) chain.push(t);
+      }
+    } else {
+      allGeodesic = false;
     }
   }
   lineDrape = drape;
-  lineChain = chain;
+  lineChain = chain.length ? chain : null;
+  lineAllGeodesic = allGeodesic;
+}
+
+/** Remove the last dropped point (Backspace / Ctrl+Z), keeping it for redo. */
+function removeLastLinePoint() {
+  if (!linePoints.length) return false;
+  lineRedo.push(linePoints.pop());
+  rebuildLinePath();
+  refreshLinePreview();
+  return true;
+}
+
+/** Restore the most recently removed point (Ctrl+Y / Ctrl+Shift+Z). */
+function restoreLinePoint() {
+  if (!lineRedo.length) return false;
+  linePoints.push(lineRedo.pop());
+  rebuildLinePath();
+  refreshLinePreview();
+  return true;
 }
 
 function refreshLinePreview() {
@@ -181,8 +219,11 @@ function refreshLinePreview() {
 
 function clearLine() {
   linePoints = [];
+  lineRedo = [];
   lineDrape = [];
   lineChain = null;
+  lineAllGeodesic = false;
+  segCache = [];
   viewer.clearPolylinePreview();
 }
 
@@ -209,7 +250,9 @@ async function commitLine(asBlocker) {
     }
   } else {
     painter.beginStroke();
-    const n = (surfaceMode() && lineChain && lineChain.length)
+    // geodesic stripe when every segment draped on the surface; otherwise the
+    // on-surface drape (covers straight-fallback segments too)
+    const n = (surfaceMode() && lineChain && lineAllGeodesic)
       ? painter.paintSurfaceStripe(lineChain, lineWidth, asBlocker)
       : painter.paintPolyline(lineDrape, lineWidth, asBlocker);
     painter.endStroke();
@@ -616,22 +659,33 @@ window.addEventListener('keydown', (e) => {
   if (k === 'x') setTool('blocker');
   if (k === 'l') setTool('line');
   if (e.key === 'Backspace' && tool === 'line' && linePoints.length) {
-    linePoints.pop();
-    rebuildLinePath();
-    refreshLinePreview();
-    setStatus(`Removed last point — ${linePoints.length} left.`);
+    removeLastLinePoint();
+    setStatus(`Removed last point — ${linePoints.length} left${lineRedo.length ? ' (Ctrl+Y to restore)' : ''}.`);
     e.preventDefault();
+    return;
   }
   if (e.key === '[') adjustBrush(-1);
   if (e.key === ']') adjustBrush(1);
   if (e.key === '+' || e.key === '=') doGrow();
   if (e.key === '-') doShrink();
   if ((e.ctrlKey || e.metaKey) && k === 'z' && !e.shiftKey) {
-    if (painter.undo()) setStatus('Undid stroke.');
+    // while a line is being placed, Ctrl+Z removes the last point instead of
+    // undoing the previous committed stroke
+    if (tool === 'line' && linePoints.length) {
+      removeLastLinePoint();
+      setStatus(`Removed last point — ${linePoints.length} left${lineRedo.length ? ' (Ctrl+Y to restore)' : ''}.`);
+    } else if (painter.undo()) {
+      setStatus('Undid stroke.');
+    }
     e.preventDefault();
   }
   if ((e.ctrlKey || e.metaKey) && (k === 'y' || (k === 'z' && e.shiftKey))) {
-    if (painter.redo()) setStatus('Redid stroke.');
+    if (tool === 'line' && lineRedo.length) {
+      restoreLinePoint();
+      setStatus(`Restored point — ${linePoints.length} placed.`);
+    } else if (painter.redo()) {
+      setStatus('Redid stroke.');
+    }
     e.preventDefault();
   }
   const n = parseInt(e.key, 10);
@@ -656,6 +710,7 @@ canvas.addEventListener('pointerdown', (e) => {
   const hit = viewer.pick(e);
   if (!hit) return;
   if (tool === 'line') {
+    lineRedo = []; // a fresh point starts a new branch
     linePoints.push({ point: hit.point.clone(), tri: hit.faceIndex });
     rebuildLinePath();
     refreshLinePreview();
