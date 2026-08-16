@@ -5,7 +5,7 @@ import { exportMultiPart3MF, exportPainted3MF } from './export3mf.js';
 import { ProjectionSession, setDeshade } from './projection.js';
 import { removeBackground } from './imagebg.js';
 import { parse3MF } from './import3mf.js';
-import { rasterizeGlyphs, buildPlacements, buildTextClassifier } from './curvedtext.js';
+import { rasterizeGlyphs, buildPlacements, buildTextClassifier, buildLevelBaseline, glyphsTotalMm } from './curvedtext.js';
 
 const viewer = new Viewer(document.getElementById('viewport'));
 const painter = new Painter();
@@ -149,18 +149,6 @@ function computeSegment(a, b) {
   // null = disconnected shells; fall back to a straight chord for this segment
   if (!sp) return { drape: [a.point.clone(), b.point.clone()], chain: null };
   return { drape: sp.polyPoints, chain: sp.triChain };
-}
-
-/** Concatenated surface-hugging drape through a list of {point, tri} hits. */
-function geodesicDrape(pts) {
-  if (pts.length < 2) return pts.map((p) => p.point.clone());
-  const drape = [];
-  for (let i = 0; i < pts.length - 1; i++) {
-    const seg = computeSegment(pts[i], pts[i + 1]);
-    const start = drape.length ? 1 : 0;
-    for (let k = start; k < seg.drape.length; k++) drape.push(seg.drape[k]);
-  }
-  return drape;
 }
 
 /**
@@ -549,17 +537,23 @@ document.getElementById('btn-text-create').addEventListener('click', async () =>
 // ---- curved (per-glyph "use surface") text ----
 
 let textPlacing = false;
-let textPath = [];      // [{ point, tri }] baseline hits on the model
+let textAnchor = null;  // { point, tri } single placement click (Orca-style)
 let textLayout = null;  // pre-rasterized glyphs for the placement in progress
 
 document.getElementById('text-wrap').addEventListener('change', () => {
   const on = document.getElementById('text-wrap').checked;
   document.getElementById('text-height-wrap').style.display = on ? '' : 'none';
+  document.getElementById('text-rot-wrap').style.display = on ? '' : 'none';
   document.getElementById('text-detail-wrap').style.display = on ? '' : 'none';
   document.getElementById('btn-text-create').textContent = on ? 'Place curved text…' : 'Create text decal';
   document.getElementById('text-hint').textContent = on
-    ? 'Click points on the model to lay the text baseline (2+), then Apply. Each glyph projects in its own surface frame, so text wraps around cylinders. Detail (below) controls edge crispness.'
+    ? 'Click once on the model to place text; it wraps level around the surface (Orca-style), each glyph in its own frame. Rotation tilts the baseline; Detail sets edge crispness.'
     : 'Renders your text as a decal in the active filament color. Position it over the model, then Apply decal below. Works on flat and gently curved faces.';
+});
+
+document.getElementById('text-rot').addEventListener('input', (e) => {
+  document.getElementById('text-rot-val').textContent = e.target.value + '°';
+  refreshTextBaseline();
 });
 
 function startTextPlacement(text, family) {
@@ -570,26 +564,40 @@ function startTextPlacement(text, family) {
     italic: document.getElementById('text-italic').checked,
   });
   textPlacing = true;
-  textPath = [];
+  textAnchor = null;
   document.getElementById('text-place-actions').style.display = '';
+  document.getElementById('text-place-hint').style.display = '';
   document.getElementById('btn-text-create').style.display = 'none';
   viewer.clearPolylinePreview();
-  setStatus('Curved text: click points on the model to lay the baseline (2 or more), then "Apply curved text".');
+  setStatus('Curved text: click once on the model to place the text, then "Apply curved text".');
+}
+
+/** Level baseline polyline for the current anchor + rotation, or null. */
+function currentTextBaseline() {
+  if (!textAnchor || !textLayout) return null;
+  const heightMm = parseFloat(document.getElementById('text-height').value) || 10;
+  const lengthMm = glyphsTotalMm(textLayout, heightMm);
+  return buildLevelBaseline(painter.mesh, painter.triNormals, textAnchor, {
+    rotationDeg: parseFloat(document.getElementById('text-rot').value) || 0,
+    lengthMm,
+  });
 }
 
 function refreshTextBaseline() {
   if (!textPlacing) return;
   const heightMm = parseFloat(document.getElementById('text-height').value) || 10;
+  const baseline = currentTextBaseline();
+  if (!baseline) { viewer.clearPolylinePreview(); return; }
   const colorHex = parseInt(painter.groups[painter.activeGroup].color.slice(1), 16);
-  viewer.setPolylinePreview(
-    textPath.map((p) => p.point), geodesicDrape(textPath), heightMm, colorHex);
+  viewer.setPolylinePreview([textAnchor.point], baseline, heightMm, colorHex);
 }
 
 function endTextPlacement() {
   textPlacing = false;
-  textPath = [];
+  textAnchor = null;
   textLayout = null;
   document.getElementById('text-place-actions').style.display = 'none';
+  document.getElementById('text-place-hint').style.display = 'none';
   document.getElementById('btn-text-create').style.display = '';
   viewer.clearPolylinePreview();
 }
@@ -600,17 +608,17 @@ document.getElementById('btn-text-cancel').addEventListener('click', () => {
 });
 
 document.getElementById('btn-text-apply').addEventListener('click', async () => {
-  if (!textPlacing || textPath.length < 2) {
-    return setStatus('Click at least two points on the model for the text baseline.');
+  if (!textPlacing || !textAnchor) {
+    return setStatus('Click once on the model to place the text first.');
   }
   const heightMm = parseFloat(document.getElementById('text-height').value) || 10;
-  const drape = geodesicDrape(textPath);
-  const placements = buildPlacements(textLayout, drape, heightMm, painter.mesh, painter.triNormals);
+  const baseline = currentTextBaseline();
+  const placements = buildPlacements(textLayout, baseline, heightMm, painter.mesh, painter.triNormals);
   if (!placements.length) return setStatus('No printable glyphs to place.');
   const group = painter.activeGroup;
   const { classify, inScope, triInScope } = buildTextClassifier(placements, group, heightMm);
   const subdivide = parseInt(document.getElementById('text-subdiv').value, 10);
-  const layout = textLayout, path = textPath.slice();
+  const layout = textLayout, anchor = textAnchor;
   document.getElementById('btn-text-apply').disabled = true;
   setStatus('Applying curved text…');
   try {
@@ -624,7 +632,7 @@ document.getElementById('btn-text-apply').addEventListener('click', async () => 
       onProgress: (f, phase) => setStatus(`Applying curved text — ${phase || ''} ${Math.round(f * 100)}%…`),
     });
     if (applied === 0) {
-      setStatus('Curved text landed nothing — try a larger Height, a Detail level of Fine+, or points closer to the surface.');
+      setStatus('Curved text landed nothing — try a larger Height or a Detail level of Fine+.');
     } else {
       setStatus(`Curved text applied: ${applied} triangles painted in "${painter.groups[group].name}"` +
         (subdivide
@@ -635,7 +643,7 @@ document.getElementById('btn-text-apply').addEventListener('click', async () => 
   } catch (err) {
     console.error(err);
     setStatus(`Curved text failed: ${err.message}`);
-    textLayout = layout; textPath = path; // keep the placement so they can retry
+    textLayout = layout; textAnchor = anchor; // keep the placement so they can retry
   } finally {
     document.getElementById('btn-text-apply').disabled = false;
   }
@@ -924,9 +932,9 @@ canvas.addEventListener('pointerdown', (e) => {
   const hit = viewer.pick(e);
   if (!hit) return;
   if (textPlacing) {
-    textPath.push({ point: hit.point.clone(), tri: hit.faceIndex });
+    textAnchor = { point: hit.point.clone(), tri: hit.faceIndex };
     refreshTextBaseline();
-    setStatus(`Curved text baseline: ${textPath.length} point(s). Add more or "Apply curved text".`);
+    setStatus('Curved text placed — adjust Rotation, click again to move it, or "Apply curved text".');
     return;
   }
   if (tool === 'line') {

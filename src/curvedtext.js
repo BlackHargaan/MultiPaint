@@ -90,6 +90,69 @@ function origFace(geometry, faceIndex) {
   return index ? index.getX(faceIndex * 3) / 3 : faceIndex;
 }
 
+/** Total advance width of the text in mm at the given cap height. */
+export function glyphsTotalMm(glyphs, heightMm) {
+  const pxPerMm = glyphs.lineHpx / heightMm;
+  let px = 0;
+  for (const g of glyphs.glyphs) px += g.advancePx;
+  return px / pxPerMm;
+}
+
+/**
+ * Build a level baseline that wraps around the model from a single anchor
+ * click — the Orca "use surface" model, not a geodesic between two points. At
+ * every step the advance direction is the horizontal surface tangent
+ * (perpendicular to world up and the surface normal), rotated in-plane by
+ * rotationDeg, so on a cylinder or cone the text stays level and reads upright
+ * instead of drifting/tilting along a geodesic. Returns a surface polyline
+ * (arc-length ~ds spacing) centered on the anchor per `alignment`.
+ */
+export function buildLevelBaseline(mesh, triNormals, anchor, opts = {}) {
+  const { rotationDeg = 0, lengthMm, alignment = 'center' } = opts;
+  const bvh = mesh.geometry.boundsTree;
+  const up = new THREE.Vector3(0, 0, 1);
+  const theta = rotationDeg * Math.PI / 180;
+  const ds = opts.dsMm ?? Math.max(0.4, lengthMm / 80);
+
+  const frameAt = (P) => {
+    const t = {};
+    bvh.closestPointToPoint(P, t);
+    const face = origFace(mesh.geometry, t.faceIndex ?? 0);
+    const N = new THREE.Vector3(triNormals[face * 3], triNormals[face * 3 + 1], triNormals[face * 3 + 2]);
+    return { P: (t.point ? t.point.clone() : P.clone()), N };
+  };
+  // horizontal (level) surface tangent, rotated in-plane by theta, oriented so
+  // the glyph "up" (N x dir) points toward world up — text reads upright
+  const dirAt = (N) => {
+    const h = new THREE.Vector3().crossVectors(up, N);
+    if (h.lengthSq() < 1e-8) h.set(1, 0, 0); // N ∥ up (a cap) — arbitrary level dir
+    h.normalize();
+    if (theta) h.applyAxisAngle(N, theta);
+    if (new THREE.Vector3().crossVectors(N, h).dot(up) < 0) h.negate();
+    return h.normalize();
+  };
+  // walk the surface a distance L from the anchor, re-leveling each step
+  const march = (L, sign) => {
+    const pts = [];
+    let cur = frameAt(anchor.point);
+    for (let dist = 0; dist < L; dist += ds) {
+      const dir = dirAt(cur.N).multiplyScalar(sign);
+      cur = frameAt(cur.P.clone().addScaledVector(dir, ds));
+      pts.push(cur.P.clone());
+    }
+    return pts;
+  };
+
+  const anchorP = frameAt(anchor.point).P;
+  let leftLen, rightLen;
+  if (alignment === 'left') { leftLen = 0; rightLen = lengthMm; }
+  else if (alignment === 'right') { leftLen = lengthMm; rightLen = 0; }
+  else { leftLen = lengthMm / 2; rightLen = lengthMm / 2; }
+  const left = march(leftLen, -1).reverse();
+  const right = march(rightLen, 1);
+  return [...left, anchorP.clone(), ...right];
+}
+
 /**
  * Place glyphs along the drape. heightMm sets the cap/line height in mm; the
  * text starts at the drape origin and advances by each glyph's width. Each

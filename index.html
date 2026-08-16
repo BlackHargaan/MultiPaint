@@ -100,6 +100,10 @@
               <label class="proj-opt" id="text-height-wrap" style="display:none" title="Text (cap) height on the model, in millimeters">Height (mm)
                 <input type="number" id="text-height" min="1" max="200" step="0.5" value="10" />
               </label>
+              <label class="proj-opt" id="text-rot-wrap" style="display:none" title="Tilt the level baseline in the surface plane (0° = horizontal, wraps level around the model)">Rotation
+                <input type="range" id="text-rot" data-default="0" min="-180" max="180" step="1" value="0" />
+                <span id="text-rot-val">0°</span>
+              </label>
               <label class="proj-opt" id="text-detail-wrap" style="display:none" title="Split triangles along glyph edges for crisp letters on coarse or lathe meshes. Above Off, this rebuilds geometry and clears undo history.">Detail
                 <select id="text-subdiv" class="proj-select">
                   <option value="0">Off — whole triangles</option>
@@ -114,6 +118,9 @@
                 <button id="btn-text-apply">Apply curved text</button>
                 <button id="btn-text-cancel">Cancel</button>
               </div>
+              <p class="hint" id="text-place-hint" style="display:none">Click
+              once on the model to place the text; it wraps level around the
+              surface. Adjust Rotation, click again to reposition, then Apply.</p>
               <p class="hint" id="text-hint">Renders your text as a decal in the
               active filament color. Position it over the model (drag / scroll /
               corner handle), then Apply decal below. Works on flat and gently

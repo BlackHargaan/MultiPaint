@@ -133,15 +133,17 @@ curved faces today; per-glyph wrap around cylinders is planned.
 
 **Curved text (per-glyph, "use surface"):** tick **Wrap on surface (per
 glyph)**, set a **Height (mm)**, click **Place curved text…**, then click
-points on the model to lay the baseline (2+; add more to follow a curve) and
-**Apply**. Each glyph is projected in its own surface tangent frame — anchored
-on the surface with axes from the local normal and the baseline direction — so
-a word wraps around a mug or cooler undistorted instead of smearing through one
-flat plane. The baseline runs as a geodesic drape (the same surface-path engine
-the Line tool uses). **Detail** subdivides along the glyph edges for crisp
-letters on coarse/lathe meshes (like the decal Detail; above Off it rebuilds
-geometry and clears undo). Esc or **Cancel** aborts placement. Thin-stroke text
-wants Finest/Ultra; raise Height if letters come out chunky.
+**once** on the model to place the text and **Apply**. Like Orca's "use
+surface / per glyph", the text lays along a **level baseline that wraps around
+the model at constant height** — the advance direction is re-leveled to the
+horizontal surface tangent at every step, so it stays flat and upright on a
+cone or cylinder instead of drifting along a geodesic. Each glyph then projects
+in its own surface tangent frame, undistorted. **Rotation** tilts the baseline
+in the surface plane; click again to reposition; the preview updates live.
+**Detail** subdivides along the glyph edges for crisp letters on coarse/lathe
+meshes (like the decal Detail; above Off it rebuilds geometry and clears undo).
+Esc or **Cancel** aborts. Thin-stroke text wants Finest/Ultra; raise Height if
+letters come out chunky.
 
 **Snapshot round-trip (for AI-editing an exact view, WIP):**
 
