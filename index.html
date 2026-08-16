@@ -36,6 +36,14 @@
           <button id="btn-despeckle" title="Absorb tiny leftover paint islands into their surrounding color">Despeckle</button>
           <button id="btn-clear-blockers" title="Remove all blockers">Clear blockers</button>
         </div>
+        <label id="mirror-wrap" title="Mirror painting: every stroke is reflected across the model-center plane of this axis, so you paint both sides at once (needs a symmetric model)">Mirror
+          <select id="mirror-axis">
+            <option value="">Off</option>
+            <option value="x">X ↔</option>
+            <option value="y">Y ↔</option>
+            <option value="z">Z ↕</option>
+          </select>
+        </label>
         <label id="brush-size-wrap">Brush size
           <input type="range" id="brush-size" data-default="5" min="0.5" max="30" step="0.5" value="5" />
           <span id="brush-size-val">5</span>
@@ -103,6 +111,16 @@
               <label class="proj-opt" id="text-rot-wrap" style="display:none" title="Tilt the level baseline in the surface plane (0° = horizontal, wraps level around the model)">Rotation
                 <input type="range" id="text-rot" data-default="0" min="-180" max="180" step="1" value="0" />
                 <span id="text-rot-val">0°</span>
+              </label>
+              <label class="proj-opt" id="text-align-wrap" style="display:none" title="Where the text sits relative to the click point">Align
+                <select id="text-align" class="proj-select">
+                  <option value="center" selected>Center</option>
+                  <option value="left">Left</option>
+                  <option value="right">Right</option>
+                </select>
+              </label>
+              <label class="proj-opt" id="text-gap-wrap" style="display:none" title="Extra spacing between characters, in millimeters (Orca's char gap)">Char gap (mm)
+                <input type="number" id="text-gap" min="-5" max="20" step="0.2" value="0" />
               </label>
               <label class="proj-opt" id="text-detail-wrap" style="display:none" title="Split triangles along glyph edges for crisp letters on coarse or lathe meshes. Above Off, this rebuilds geometry and clears undo history.">Detail
                 <select id="text-subdiv" class="proj-select">

@@ -64,6 +64,17 @@ export class Viewer {
     this.lineGroup.renderOrder = 998;
     this.scene.add(this.lineGroup);
 
+    // symmetry (mirror) plane helper
+    this.mirrorPlane = new THREE.Mesh(
+      new THREE.PlaneGeometry(1, 1),
+      new THREE.MeshBasicMaterial({
+        color: 0x6fc3ff, transparent: true, opacity: 0.12,
+        side: THREE.DoubleSide, depthWrite: false,
+      })
+    );
+    this.mirrorPlane.visible = false;
+    this.scene.add(this.mirrorPlane);
+
     window.addEventListener('resize', () => this.resize());
     this.resize();
 
@@ -356,6 +367,24 @@ export class Viewer {
       this.lineGroup.remove(child);
       child.geometry.dispose();
     }
+  }
+
+  /** Show the mirror plane for 'x'|'y'|'z' at the model-center, or hide it. */
+  setMirrorPlane(axis) {
+    if (!axis || !this.mesh) { this.mirrorPlane.visible = false; return; }
+    const bb = this.mesh.geometry.boundingBox;
+    const c = new THREE.Vector3();
+    bb.getCenter(c);
+    const s = new THREE.Vector3();
+    bb.getSize(s);
+    const span = Math.max(s.x, s.y, s.z) * 1.3;
+    this.mirrorPlane.position.copy(c);
+    this.mirrorPlane.scale.set(span, span, span);
+    // PlaneGeometry lies in XY (normal +Z); orient its normal along the axis
+    if (axis === 'x') this.mirrorPlane.rotation.set(0, Math.PI / 2, 0);
+    else if (axis === 'y') this.mirrorPlane.rotation.set(Math.PI / 2, 0, 0);
+    else this.mirrorPlane.rotation.set(0, 0, 0);
+    this.mirrorPlane.visible = true;
   }
 
   updateBrushCursor(hit, radius, color = 0xffffff) {

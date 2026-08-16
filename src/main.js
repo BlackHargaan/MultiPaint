@@ -76,6 +76,9 @@ async function loadFile(file) {
     projection.clear();
     document.getElementById('btn-proj-import').disabled = true;
     document.getElementById('btn-proj-return').disabled = true;
+    // painter.setMesh already rebuilt the mirror map for the new geometry;
+    // reposition the plane helper to the new model
+    viewer.setMirrorPlane(painter.mirrorAxis);
 
     if (imported) {
       let maxG = 0;
@@ -257,6 +260,7 @@ async function commitLine(asBlocker) {
         onProgress: (f) => setStatus(`Refining line edges — ${Math.round(f * 100)}%…`),
       });
       const n = painter.paintPolyline(lineDrape, lineWidth, asBlocker);
+      if (painter.mirrorAxis) painter.paintPolyline(lineDrape.map((p) => painter.mirrorPoint(p)), lineWidth, asBlocker);
       setStatus(`${asBlocker ? 'Blocked' : 'Painted'} ${n} triangles along the line with crisp edges — mesh now ${painter.triCount.toLocaleString()} triangles (undo history cleared).`);
     } catch (err) {
       console.error(err);
@@ -271,6 +275,8 @@ async function commitLine(asBlocker) {
     const n = (surfaceMode() && lineChain && lineAllGeodesic)
       ? painter.paintSurfaceStripe(lineChain, lineWidth, asBlocker)
       : painter.paintPolyline(lineDrape, lineWidth, asBlocker);
+    // mirror: paint the reflected drape (a solid stripe, no per-triangle gaps)
+    if (painter.mirrorAxis) painter.paintPolyline(lineDrape.map((p) => painter.mirrorPoint(p)), lineWidth, asBlocker);
     painter.endStroke();
     // whole-triangle painting on a coarse/lathe (sliver) mesh spills the stripe
     // across full-height triangles — hint that Crisp edges gives a clean line
@@ -563,6 +569,8 @@ document.getElementById('text-wrap').addEventListener('change', () => {
   const on = document.getElementById('text-wrap').checked;
   document.getElementById('text-height-wrap').style.display = on ? '' : 'none';
   document.getElementById('text-rot-wrap').style.display = on ? '' : 'none';
+  document.getElementById('text-align-wrap').style.display = on ? '' : 'none';
+  document.getElementById('text-gap-wrap').style.display = on ? '' : 'none';
   document.getElementById('text-detail-wrap').style.display = on ? '' : 'none';
   document.getElementById('btn-text-create').textContent = on ? 'Place curved text…' : 'Create text decal';
   document.getElementById('text-hint').textContent = on
@@ -574,6 +582,9 @@ document.getElementById('text-rot').addEventListener('input', (e) => {
   document.getElementById('text-rot-val').textContent = e.target.value + '°';
   refreshTextBaseline();
 });
+document.getElementById('text-align').addEventListener('change', refreshTextBaseline);
+document.getElementById('text-gap').addEventListener('input', refreshTextBaseline);
+document.getElementById('text-height').addEventListener('input', refreshTextBaseline);
 
 function startTextPlacement(text, family) {
   if (!painter.mesh) return setStatus('Open a model first.');
@@ -591,13 +602,24 @@ function startTextPlacement(text, family) {
   setStatus('Curved text: click once on the model to place the text, then "Apply curved text".');
 }
 
-/** Level baseline polyline for the current anchor + rotation, or null. */
+/** Current curved-text options from the panel. */
+function textOpts() {
+  return {
+    heightMm: parseFloat(document.getElementById('text-height').value) || 10,
+    charGapMm: parseFloat(document.getElementById('text-gap').value) || 0,
+    alignment: document.getElementById('text-align').value || 'center',
+    rotationDeg: parseFloat(document.getElementById('text-rot').value) || 0,
+  };
+}
+
+/** Level baseline polyline for the current anchor + options, or null. */
 function currentTextBaseline() {
   if (!textAnchor || !textLayout) return null;
-  const heightMm = parseFloat(document.getElementById('text-height').value) || 10;
-  const lengthMm = glyphsTotalMm(textLayout, heightMm);
+  const o = textOpts();
+  const lengthMm = glyphsTotalMm(textLayout, o.heightMm, o.charGapMm);
   return buildLevelBaseline(painter.mesh, painter.triNormals, textAnchor, {
-    rotationDeg: parseFloat(document.getElementById('text-rot').value) || 0,
+    rotationDeg: o.rotationDeg,
+    alignment: o.alignment,
     lengthMm,
   });
 }
@@ -630,9 +652,9 @@ document.getElementById('btn-text-apply').addEventListener('click', async () => 
   if (!textPlacing || !textAnchor) {
     return setStatus('Click once on the model to place the text first.');
   }
-  const heightMm = parseFloat(document.getElementById('text-height').value) || 10;
+  const { heightMm, charGapMm } = textOpts();
   const baseline = currentTextBaseline();
-  const placements = buildPlacements(textLayout, baseline, heightMm, painter.mesh, painter.triNormals);
+  const placements = buildPlacements(textLayout, baseline, heightMm, painter.mesh, painter.triNormals, { charGapMm });
   if (!placements.length) return setStatus('No printable glyphs to place.');
   const group = painter.activeGroup;
   const { classify, inScope, triInScope } = buildTextClassifier(placements, group, heightMm);
@@ -853,6 +875,20 @@ document.getElementById('btn-clear-blockers').addEventListener('click', () => {
   if (!painter.mesh) return;
   painter.clearBlockers();
   setStatus('Cleared all blockers.');
+});
+
+// ---- mirror / symmetry ----
+
+document.getElementById('mirror-axis').addEventListener('change', (e) => {
+  const axis = e.target.value;
+  if (!painter.mesh) { viewer.setMirrorPlane(axis); return; }
+  const { matched, total } = painter.setSymmetry(axis);
+  viewer.setMirrorPlane(axis);
+  if (!axis) return setStatus('Mirror off.');
+  const pct = total ? Math.round(matched / total * 100) : 0;
+  setStatus(pct >= 90
+    ? `Mirror ${axis.toUpperCase()} on — strokes paint both sides.`
+    : `Mirror ${axis.toUpperCase()} on, but only ${pct}% of triangles have a symmetric partner — this model isn't mirror-symmetric across ${axis.toUpperCase()}, so some strokes won't fully mirror.`);
 });
 
 // ---- keyboard ----

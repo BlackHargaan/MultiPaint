@@ -90,12 +90,13 @@ function origFace(geometry, faceIndex) {
   return index ? index.getX(faceIndex * 3) / 3 : faceIndex;
 }
 
-/** Total advance width of the text in mm at the given cap height. */
-export function glyphsTotalMm(glyphs, heightMm) {
+/** Total advance width of the text in mm at the given cap height, including
+ *  charGapMm of extra spacing between each pair of glyphs. */
+export function glyphsTotalMm(glyphs, heightMm, charGapMm = 0) {
   const pxPerMm = glyphs.lineHpx / heightMm;
   let px = 0;
   for (const g of glyphs.glyphs) px += g.advancePx;
-  return px / pxPerMm;
+  return px / pxPerMm + charGapMm * Math.max(0, glyphs.glyphs.length - 1);
 }
 
 /**
@@ -158,14 +159,17 @@ export function buildLevelBaseline(mesh, triNormals, anchor, opts = {}) {
  * text starts at the drape origin and advances by each glyph's width. Each
  * placement carries its surface-snapped anchor and an orthonormal (T,B,N).
  */
-export function buildPlacements(glyphs, drape, heightMm, mesh, triNormals) {
+export function buildPlacements(glyphs, drape, heightMm, mesh, triNormals, opts = {}) {
+  const charGapMm = opts.charGapMm ?? 0;
   const { cum } = arcLengths(drape);
   const bvh = mesh.geometry.boundsTree;
   const pxPerMm = glyphs.lineHpx / heightMm;
   const placements = [];
   let advMm = 0;
   const target = {};
-  for (const g of glyphs.glyphs) {
+  const list = glyphs.glyphs;
+  for (let gi = 0; gi < list.length; gi++) {
+    const g = list[gi];
     const wMm = g.advancePx / pxPerMm;
     if (g.mask) {
       const sCenter = advMm + wMm / 2;
@@ -186,7 +190,7 @@ export function buildPlacements(glyphs, drape, heightMm, mesh, triNormals) {
         mask: g.mask, w: g.w, h: g.h,
       });
     }
-    advMm += wMm;
+    advMm += wMm + (gi < list.length - 1 ? charGapMm : 0);
   }
   return placements;
 }

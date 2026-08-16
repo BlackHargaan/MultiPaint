@@ -26,7 +26,10 @@ export class Painter {
     this.undoStack = [];       // array of { group: Map<tri,prev>, blocked: Map<tri,prev> }
     this.redoStack = [];
     this._strokeChanges = null;
-    this._scrub = null;        // active scrubbable-fill state
+    this._scrubs = null;       // active scrubbable-fill states (main [+ mirror])
+    this.mirrorAxis = null;    // 'x' | 'y' | 'z' — live symmetry axis, or null
+    this.mirrorCenter = null;  // {x,y,z} model center defining the mirror plane
+    this._mirroring = false;   // reentrancy guard for symmetric tool calls
   }
 
   setMesh(mesh) {
@@ -36,10 +39,11 @@ export class Painter {
     this.blocked = new Uint8Array(this.triCount);
     this.undoStack = [];
     this.redoStack = [];
-    this._scrub = null;
+    this._scrubs = null;
     this.adjacency = buildAdjacency(mesh.geometry);
     this.triNormals = computeTriNormals(mesh.geometry);
     this.triCentroids = computeTriCentroids(mesh.geometry);
+    if (this.mirrorAxis) this.setSymmetry(this.mirrorAxis);
     this.repaintAll();
   }
 
@@ -66,11 +70,68 @@ export class Painter {
     this.undoStack = [];
     this.redoStack = [];
     this._strokeChanges = null;
-    this._scrub = null;
+    this._scrubs = null;
     this.adjacency = buildAdjacency(newGeo);
     this.triNormals = computeTriNormals(newGeo);
     this.triCentroids = computeTriCentroids(newGeo);
+    if (this.mirrorAxis) this.setSymmetry(this.mirrorAxis);
     this.repaintAll();
+  }
+
+  // ---- symmetry / mirror painting ----
+
+  /**
+   * Enable mirror painting across the model-center plane of `axis` ('x','y',
+   * 'z'), or disable with a falsy axis. While on, the direct painting tools
+   * (brush, blocker, line, smart/island fill) apply their stroke to the
+   * mirrored location too, so you paint both sides at once. Returns a match
+   * ratio: how many sampled surface points have a partner across the plane
+   * (a low ratio means the model isn't symmetric across that axis).
+   */
+  setSymmetry(axis) {
+    this.mirrorAxis = axis || null;
+    if (!this.mirrorAxis || !this.mesh) { this.mirrorCenter = null; return { matched: 0, total: 1 }; }
+    const bb = this.mesh.geometry.boundingBox;
+    this.mirrorCenter = {
+      x: (bb.min.x + bb.max.x) / 2, y: (bb.min.y + bb.max.y) / 2, z: (bb.min.z + bb.max.z) / 2,
+    };
+    return this._symmetryStats();
+  }
+
+  /** Reflect a point across the active mirror plane. */
+  mirrorPoint(p) {
+    const c = this.mirrorCenter, ax = this.mirrorAxis;
+    return new THREE.Vector3(
+      ax === 'x' ? 2 * c.x - p.x : p.x,
+      ax === 'y' ? 2 * c.y - p.y : p.y,
+      ax === 'z' ? 2 * c.z - p.z : p.z);
+  }
+
+  /** Nearest surface triangle (original order) to a world point, or -1. */
+  nearestFace(p) {
+    const target = {};
+    this.mesh.geometry.boundsTree.closestPointToPoint(p, target);
+    let f = target.faceIndex ?? -1;
+    const gi = this.mesh.geometry.index;
+    if (f >= 0 && gi) f = gi.getX(f * 3) / 3;
+    return f;
+  }
+
+  /** Fraction of sampled triangle centroids whose mirror lands on the surface. */
+  _symmetryStats() {
+    const cen = this.triCentroids;
+    const diag = this.mesh.geometry.boundingBox.min.distanceTo(this.mesh.geometry.boundingBox.max);
+    const tol = diag * 0.01;
+    const step = Math.max(1, Math.floor(this.triCount / 3000));
+    const target = {};
+    let matched = 0, total = 0;
+    for (let t = 0; t < this.triCount; t += step) {
+      const mp = this.mirrorPoint(new THREE.Vector3(cen[t * 3], cen[t * 3 + 1], cen[t * 3 + 2]));
+      this.mesh.geometry.boundsTree.closestPointToPoint(mp, target);
+      if ((target.distance ?? Infinity) <= tol) matched++;
+      total++;
+    }
+    return { matched, total };
   }
 
   // ---- group management ----
@@ -352,11 +413,16 @@ export class Painter {
   }
 
   /** Paint with the active group, or a specific group (0 = erase to base). */
-  brush(point, radius, seedTri, through = false, group = this.activeGroup) {
+  brush(point, radius, seedTri, through = false, group = this.activeGroup, _mir = false) {
     if (!this.mesh) return;
     const apply = (t) => this._assign(t, group);
     if (through) this._sphereBrush(point, radius, apply);
     else this._walkBrush(point, radius, seedTri, apply);
+    if (this.mirrorAxis && !_mir) {
+      const mp = this.mirrorPoint(point);
+      const ms = this.nearestFace(mp);
+      if (ms >= 0) this.brush(mp, radius, ms, through, group, true);
+    }
   }
 
   /**
@@ -545,11 +611,16 @@ export class Painter {
   }
 
   /** Paint (or erase, when erase=true) fill blockers under the brush. */
-  blockerBrush(point, radius, seedTri, erase, through = false) {
+  blockerBrush(point, radius, seedTri, erase, through = false, _mir = false) {
     if (!this.mesh) return;
     const apply = (t) => this._setBlocked(t, erase ? 0 : 1);
     if (through) this._sphereBrush(point, radius, apply);
     else this._walkBrush(point, radius, seedTri, apply);
+    if (this.mirrorAxis && !_mir) {
+      const mp = this.mirrorPoint(point);
+      const ms = this.nearestFace(mp);
+      if (ms >= 0) this.blockerBrush(mp, radius, ms, erase, through, true);
+    }
   }
 
   clearBlockers() {
@@ -579,6 +650,23 @@ export class Painter {
    */
   startScrubFill(seedTri) {
     if (!this.mesh || this.blocked[seedTri]) return false;
+    this._scrubs = [this._buildScrub(seedTri)];
+    // mirror: run a parallel scrub from the mirrored seed
+    if (this.mirrorAxis) {
+      const c = this.triCentroids;
+      const ms = this.nearestFace(this.mirrorPoint(
+        new THREE.Vector3(c[seedTri * 3], c[seedTri * 3 + 1], c[seedTri * 3 + 2])));
+      if (ms >= 0 && ms !== seedTri && !this.blocked[ms]) {
+        const m = this._buildScrub(ms);
+        if (m) this._scrubs.push(m);
+      }
+    }
+    return true;
+  }
+
+  /** Priority-flood order + bottleneck costs from a seed (for scrubbing). */
+  _buildScrub(seedTri) {
+    if (this.blocked[seedTri]) return null;
     const N = this.triCount;
     const entry = new Float32Array(N).fill(Infinity);
     const done = new Uint8Array(N);
@@ -603,37 +691,39 @@ export class Painter {
         }
       }
     }
-    this._scrub = { order, costs, pos: 0, group: this.activeGroup };
-    return true;
+    return { order, costs, pos: 0, group: this.activeGroup };
   }
 
-  /** Expand/retreat the active scrub fill to the given cost threshold (degrees). */
+  /** Expand/retreat every active scrub fill to the cost threshold (degrees). */
   scrubTo(limit) {
-    const s = this._scrub;
-    if (!s) return 0;
-    while (s.pos < s.order.length && s.costs[s.pos] <= limit) {
-      this._assign(s.order[s.pos], s.group);
-      s.pos++;
-    }
-    while (s.pos > 0 && s.costs[s.pos - 1] > limit) {
-      s.pos--;
-      const t = s.order[s.pos];
-      const prev = this._strokeChanges ? this._strokeChanges.group.get(t) : undefined;
-      if (prev !== undefined) {
-        this.triGroup[t] = prev;
-        this._colorTri(t);
+    if (!this._scrubs) return 0;
+    let total = 0;
+    for (const s of this._scrubs) {
+      while (s.pos < s.order.length && s.costs[s.pos] <= limit) {
+        this._assign(s.order[s.pos], s.group);
+        s.pos++;
       }
+      while (s.pos > 0 && s.costs[s.pos - 1] > limit) {
+        s.pos--;
+        const t = s.order[s.pos];
+        const prev = this._strokeChanges ? this._strokeChanges.group.get(t) : undefined;
+        if (prev !== undefined) {
+          this.triGroup[t] = prev;
+          this._colorTri(t);
+        }
+      }
+      total += s.pos;
     }
     this.mesh.geometry.attributes.color.needsUpdate = true;
-    return s.pos;
+    return total;
   }
 
   endScrubFill() {
-    this._scrub = null;
+    this._scrubs = null;
   }
 
   /** Fill every triangle connected to the seed, stopping at blockers. */
-  islandFill(seedTri) {
+  islandFill(seedTri, _mir = false) {
     if (!this.mesh || this.blocked[seedTri]) return;
     const group = this.activeGroup;
     const visited = new Uint8Array(this.triCount);
@@ -651,6 +741,12 @@ export class Painter {
       }
     }
     this.mesh.geometry.attributes.color.needsUpdate = true;
+    if (this.mirrorAxis && !_mir) {
+      const c = this.triCentroids;
+      const ms = this.nearestFace(this.mirrorPoint(
+        new THREE.Vector3(c[seedTri * 3], c[seedTri * 3 + 1], c[seedTri * 3 + 2])));
+      if (ms >= 0 && ms !== seedTri && !this.blocked[ms]) this.islandFill(ms, true);
+    }
   }
 
   /** Expand the active group's region by one triangle ring (blockers excluded). */

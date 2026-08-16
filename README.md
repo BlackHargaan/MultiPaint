@@ -92,6 +92,16 @@ taken — handy for checking the projection result or re-shooting.
   refinement.
 - **Despeckle** — absorbs tiny leftover paint islands (hidden residue from
   painting over a region) into their surrounding color.
+- **Mirror** (toolbar dropdown: Off / X / Y / Z) — symmetry painting. With an
+  axis chosen, the direct tools (Brush, Blocker, Line, Smart Fill, Island Fill)
+  also apply the stroke to the mirror-image location across the model-center
+  plane, so you paint both sides at once — great for characters, vehicles, any
+  bilateral model. A translucent blue plane shows the mirror; the status bar
+  warns if the model isn't actually symmetric across that axis (so strokes
+  won't land where you expect). Mirroring is geometric (nearest surface point
+  at the reflected location), so it works regardless of how the mesh is
+  triangulated, and undo covers both sides in one step. Decal/text projection
+  aren't mirrored — use the tools above for symmetric detailing.
 
 ## Image projection
 
@@ -144,10 +154,12 @@ horizontal surface tangent at every step, so it stays flat and upright on a
 cone or cylinder instead of drifting along a geodesic. Each glyph then projects
 in its own surface tangent frame, undistorted. **Rotation** tilts the baseline
 in the surface plane; click again to reposition; the preview updates live.
-**Detail** subdivides along the glyph edges for crisp letters on coarse/lathe
-meshes (like the decal Detail; above Off it rebuilds geometry and clears undo).
-Esc or **Cancel** aborts. Thin-stroke text wants Finest/Ultra; raise Height if
-letters come out chunky.
+**Align** (Center/Left/Right) sets where the text sits relative to the click
+point, and **Char gap** adds spacing between characters (Orca's char gap, in
+mm). **Detail** subdivides along the glyph edges for crisp letters on
+coarse/lathe meshes (like the decal Detail; above Off it rebuilds geometry and
+clears undo). Esc or **Cancel** aborts. Thin-stroke text wants Finest/Ultra;
+raise Height if letters come out chunky.
 
 **Snapshot round-trip (for AI-editing an exact view, WIP):**
 
