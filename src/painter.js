@@ -498,6 +498,52 @@ export class Painter {
     return count;
   }
 
+  /**
+   * Drape a straight segment a→b onto the surface by marching from a toward b
+   * in small steps, each snapped to the nearest surface point (BVH). Unlike the
+   * dual-graph geodesic in surfacePath, this works in continuous space, so it
+   * gives a visually-direct, surface-hugging path even on coarse or lathe
+   * (full-height sliver) meshes where centroid-graph geodesics collapse toward
+   * the triangle mid-heights. Returns the projected points and the seed
+   * triangles under them (for paintSurfaceStripe).
+   */
+  surfaceDrapeSegment(a, b, step) {
+    const bvh = this.mesh.geometry.boundsTree;
+    const geoIndex = this.mesh.geometry.index;
+    const target = {};
+    const snap = (p) => {
+      bvh.closestPointToPoint(p, target);
+      let face = target.faceIndex ?? 0;
+      if (geoIndex) face = geoIndex.getX(face * 3) / 3;
+      return { P: target.point ? target.point.clone() : p.clone(), face };
+    };
+    const drape = [];
+    const chain = [];
+    const push = (P, face) => {
+      drape.push(P);
+      if (!chain.length || chain[chain.length - 1] !== face) chain.push(face);
+    };
+    let cur = snap(a);
+    push(cur.P, cur.face);
+    const maxSteps = Math.ceil(a.distanceTo(b) / step) * 4 + 8;
+    for (let i = 0; i < maxSteps; i++) {
+      const toB = new THREE.Vector3().subVectors(b, cur.P);
+      const d = toB.length();
+      if (d <= step) break;
+      const f = cur.face;
+      const nx = this.triNormals[f * 3], ny = this.triNormals[f * 3 + 1], nz = this.triNormals[f * 3 + 2];
+      const dot = toB.x * nx + toB.y * ny + toB.z * nz;
+      toB.set(toB.x - dot * nx, toB.y - dot * ny, toB.z - dot * nz); // tangential
+      if (toB.lengthSq() < 1e-10) break;
+      toB.normalize();
+      cur = snap(cur.P.clone().addScaledVector(toB, step));
+      push(cur.P, cur.face);
+    }
+    const end = snap(b);
+    push(end.P, end.face);
+    return { drape, chain };
+  }
+
   /** Paint (or erase, when erase=true) fill blockers under the brush. */
   blockerBrush(point, radius, seedTri, erase, through = false) {
     if (!this.mesh) return;

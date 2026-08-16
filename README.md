@@ -54,11 +54,15 @@ taken — handy for checking the projection result or re-shooting.
   erases back to the base color.
 - **Line** — click to drop points connected along the surface (previewed as a
   translucent capsule chain at true width, like a Blender spline). With **Cling
-  to surface** on (default) each segment is a geodesic path draped over the
-  mesh between the two points, so the stripe follows curvature instead of
-  cutting a straight chord under the model — the fix for lines that used to
-  dive under faces on curved regions when the points were far apart. Turn it
-  off for a straight 3D chord (e.g. to bridge a gap). Adjust *Line width* any
+  to surface** on (default) each segment is draped onto the mesh by marching the
+  straight chord across the surface a step at a time, so the stripe follows
+  curvature (no diving under faces) while staying visually direct — it does
+  *not* take the long way around the way a dual-graph geodesic does, and it
+  stays put on lathe/sliver meshes (cups, coolers) instead of sagging toward the
+  triangle mid-heights. Turn it off for a straight 3D chord (e.g. to bridge a
+  gap). On coarse or lathe meshes, whole-triangle painting spills the stripe
+  into a band; tick **Crisp edges** to subdivide along the stroke for a clean,
+  thin line (the app hints this when it detects it). Adjust *Line width* any
   time; Backspace or `Ctrl+Z` removes the last point and `Ctrl+Y` restores it,
   then commit with **Paint line** (active color) or **Block line** (fill
   barrier) — the latter is ideal for fencing off an emblem before filling it.

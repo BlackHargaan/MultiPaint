@@ -143,12 +143,11 @@ function surfaceMode() {
   return document.getElementById('line-surface').checked;
 }
 
-/** Geodesic (or straight-fallback) path for one segment a→b. */
+/** Surface-hugging path for one segment a→b: march the chord across the
+ *  surface (works on lathe/sliver meshes, no dual-graph geodesic detours). */
 function computeSegment(a, b) {
-  const sp = painter.surfacePath(a.tri, a.point, b.tri, b.point);
-  // null = disconnected shells; fall back to a straight chord for this segment
-  if (!sp) return { drape: [a.point.clone(), b.point.clone()], chain: null };
-  return { drape: sp.polyPoints, chain: sp.triChain };
+  const step = Math.max(0.3, lineWidth / 2);
+  return painter.surfaceDrapeSegment(a.point, b.point, step);
 }
 
 /**
@@ -218,6 +217,22 @@ function refreshLinePreview() {
     linePoints.map((p) => p.point), lineDrape, lineWidth, colorHex);
 }
 
+/** True when most triangles the line crosses are much larger than the line
+ *  width (coarse/lathe sliver mesh), so whole-triangle painting spills into a
+ *  band and Crisp edges is worth suggesting. */
+function stripeLooksBanded(chain, width) {
+  if (!chain || !chain.length) return false;
+  const pos = painter.mesh.geometry.attributes.position.array;
+  let over = 0;
+  for (const t of chain) {
+    const o = t * 9;
+    const e = (i, j) => Math.hypot(
+      pos[o + i] - pos[o + j], pos[o + i + 1] - pos[o + j + 1], pos[o + i + 2] - pos[o + j + 2]);
+    if (Math.max(e(0, 3), e(3, 6), e(0, 6)) > width * 2.5) over++;
+  }
+  return over / chain.length > 0.5;
+}
+
 function clearLine() {
   linePoints = [];
   lineRedo = [];
@@ -251,15 +266,19 @@ async function commitLine(asBlocker) {
     }
   } else {
     painter.beginStroke();
-    // geodesic stripe when every segment draped on the surface; otherwise the
+    // surface stripe when every segment draped on the surface; otherwise the
     // on-surface drape (covers straight-fallback segments too)
     const n = (surfaceMode() && lineChain && lineAllGeodesic)
       ? painter.paintSurfaceStripe(lineChain, lineWidth, asBlocker)
       : painter.paintPolyline(lineDrape, lineWidth, asBlocker);
     painter.endStroke();
-    setStatus(asBlocker
+    // whole-triangle painting on a coarse/lathe (sliver) mesh spills the stripe
+    // across full-height triangles — hint that Crisp edges gives a clean line
+    const coarse = surfaceMode() && n > 0 && stripeLooksBanded(lineChain, lineWidth);
+    const tip = coarse ? ' Line too thick? Tick “Crisp edges” for a clean line on coarse/lathe meshes.' : '';
+    setStatus((asBlocker
       ? `Blocked ${n} triangles along the line.`
-      : `Painted ${n} triangles along the line with "${painter.groups[painter.activeGroup].name}".`);
+      : `Painted ${n} triangles along the line with "${painter.groups[painter.activeGroup].name}".`) + tip);
   }
   clearLine();
 }
