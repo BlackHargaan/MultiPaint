@@ -416,12 +416,11 @@ document.getElementById('decal-opacity').addEventListener('input', (e) => {
 document.getElementById('btn-decal-load').addEventListener('click', () => {
   document.getElementById('decal-file').click();
 });
-document.getElementById('decal-file').addEventListener('change', async () => {
-  const file = document.getElementById('decal-file').files[0];
-  document.getElementById('decal-file').value = '';
-  if (!file) return;
-  decal.originalImg = await createImageBitmap(file);
-  decal.originalUrl = URL.createObjectURL(file);
+/** Show a loaded image/text bitmap in the decal overlay, wiring the existing
+ *  background-removal + apply controls. */
+async function presentDecal(originalImg, originalUrl, statusMsg) {
+  decal.originalImg = originalImg;
+  decal.originalUrl = originalUrl;
   // fresh image, fresh choices — a stale toggle from a previous image can
   // silently swallow whole color regions
   document.getElementById('decal-bg-remove').checked = false;
@@ -430,7 +429,107 @@ document.getElementById('decal-file').addEventListener('change', async () => {
   decalOv.style.display = 'block';
   decalOv.style.opacity = document.getElementById('decal-opacity').value / 100;
   resetDecal();
-  setStatus('Decal loaded — drag to position, corner/scroll to resize, then Apply. Orbit the model behind it as needed.');
+  setStatus(statusMsg);
+}
+
+document.getElementById('decal-file').addEventListener('change', async () => {
+  const file = document.getElementById('decal-file').files[0];
+  document.getElementById('decal-file').value = '';
+  if (!file) return;
+  const bmp = await createImageBitmap(file);
+  await presentDecal(bmp, URL.createObjectURL(file),
+    'Decal loaded — drag to position, corner/scroll to resize, then Apply. Orbit the model behind it as needed.');
+});
+
+// ---- text decal ----
+
+const GENERIC_FONTS = ['sans-serif', 'serif', 'monospace', 'cursive', 'fantasy'];
+const FALLBACK_FONTS = [
+  'Arial', 'Helvetica', 'Verdana', 'Trebuchet MS', 'Tahoma', 'Georgia',
+  'Times New Roman', 'Courier New', 'Impact', 'Comic Sans MS',
+  ...GENERIC_FONTS,
+];
+
+function fillFontOptions(families) {
+  const sel = document.getElementById('text-font');
+  const prev = sel.value;
+  sel.innerHTML = '';
+  for (const fam of families) {
+    const o = document.createElement('option');
+    o.value = fam;
+    o.textContent = fam;
+    sel.append(o);
+  }
+  if (families.includes(prev)) sel.value = prev;
+}
+fillFontOptions(FALLBACK_FONTS);
+
+// Read the user's actually-installed fonts via the Local Font Access API.
+// It needs a user gesture + permission, so it's behind the ⟳ button and falls
+// back to the common-font list when unavailable or denied.
+document.getElementById('btn-text-fonts').addEventListener('click', async () => {
+  if (!window.queryLocalFonts) {
+    setStatus('This browser can’t enumerate system fonts (Chrome/Edge only) — using the common-font list.');
+    return;
+  }
+  try {
+    const fonts = await window.queryLocalFonts();
+    const fams = [...new Set(fonts.map((f) => f.family))].sort((a, b) => a.localeCompare(b));
+    if (!fams.length) return setStatus('No system fonts returned — keeping the common-font list.');
+    fillFontOptions([...fams, ...GENERIC_FONTS]);
+    setStatus(`Loaded ${fams.length} installed font(s).`);
+  } catch {
+    setStatus('Font access was denied — using the common-font list.');
+  }
+});
+
+/** CSS font-family token: generics bare, everything else quoted. */
+function cssFontFamily(family) {
+  return GENERIC_FONTS.includes(family) ? family : JSON.stringify(family);
+}
+
+/** Rasterize text to a transparent canvas, filled in the active filament
+ *  color, ready to feed the decal projection pipeline. */
+function buildTextCanvas(text, family, bold, italic, color) {
+  const fontSize = 160; // high raster res; on-model size is set by the overlay
+  const font = `${italic ? 'italic ' : ''}${bold ? 'bold ' : ''}${fontSize}px ${cssFontFamily(family)}`;
+  const meas = document.createElement('canvas').getContext('2d');
+  meas.font = font;
+  const lines = text.split('\n');
+  let maxW = 1;
+  for (const ln of lines) maxW = Math.max(maxW, meas.measureText(ln).width);
+  const lineH = fontSize * 1.28;
+  const pad = fontSize * 0.28;
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.ceil(maxW + pad * 2);
+  canvas.height = Math.ceil(lineH * lines.length + pad * 2);
+  const ctx = canvas.getContext('2d');
+  ctx.font = font;
+  ctx.textBaseline = 'top';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = color;
+  for (let i = 0; i < lines.length; i++) {
+    ctx.fillText(lines[i], canvas.width / 2, pad + i * lineH);
+  }
+  return canvas;
+}
+
+document.getElementById('btn-text-create').addEventListener('click', async () => {
+  const text = document.getElementById('text-input').value.trim();
+  if (!text) return setStatus('Type some text first.');
+  const family = document.getElementById('text-font').value || 'sans-serif';
+  const color = painter.groups[painter.activeGroup].color;
+  // make sure the chosen font is actually loaded before we rasterize
+  try { await document.fonts.load(`160px ${cssFontFamily(family)}`); } catch { /* generic/system font */ }
+  const canvas = buildTextCanvas(
+    text, family,
+    document.getElementById('text-bold').checked,
+    document.getElementById('text-italic').checked,
+    color
+  );
+  const bmp = await createImageBitmap(canvas);
+  await presentDecal(bmp, canvas.toDataURL(),
+    `Text decal created in "${painter.groups[painter.activeGroup].name}" — position it over the model, then Apply decal.`);
 });
 
 // ---- decal background removal (non-destructive: always from the original) ----

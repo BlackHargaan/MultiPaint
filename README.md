@@ -122,6 +122,15 @@ Two ways to paint in 2D and apply in 3D (sidebar, bottom section):
    export. Note: subdividing rebuilds the mesh and clears the undo history;
    set Detail to "Off" for a normal undoable apply.
 
+**Text decal:** type text, pick a font, optionally Bold/Italic, and **Create
+text decal** — the text is rasterized in the active filament color and dropped
+into the same overlay, so you position and **Apply** it exactly like an image
+decal (with the same Detail/subdivision for crisp letters). The font list
+starts with common families; the **⟳** button loads your actually-installed
+system fonts via the browser's Local Font Access API (Chrome/Edge, asks
+permission — falls back to the common list elsewhere). Best on flat and gently
+curved faces today; per-glyph wrap around cylinders is planned.
+
 **Snapshot round-trip (for AI-editing an exact view, WIP):**
 
 1. Frame the model, then **Save view snapshot** — downloads a PNG and freezes

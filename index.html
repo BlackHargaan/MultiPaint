@@ -84,6 +84,22 @@
           <div id="projection">
             <button id="btn-decal-load">Load decal image…</button>
             <input type="file" id="decal-file" accept="image/png,image/jpeg,image/webp" hidden />
+            <div id="text-decal">
+              <input type="text" id="text-input" placeholder="Type text for a decal…" />
+              <div id="text-font-row">
+                <select id="text-font" class="proj-select" title="Font family — click ⟳ to load your installed system fonts"></select>
+                <button id="btn-text-fonts" title="Load your installed system fonts (asks the browser's permission)">⟳</button>
+              </div>
+              <div id="text-style-row">
+                <label title="Bold"><input type="checkbox" id="text-bold" /> Bold</label>
+                <label title="Italic"><input type="checkbox" id="text-italic" /> Italic</label>
+              </div>
+              <button id="btn-text-create">Create text decal</button>
+              <p class="hint">Renders your text as a decal in the active
+              filament color. Position it over the model (drag / scroll / corner
+              handle), then Apply decal below. Works on flat and gently curved
+              faces; per-glyph wrap around cylinders comes later.</p>
+            </div>
             <div id="decal-controls" style="display:none">
               <label class="proj-opt" title="Remove the image's solid background (flood-filled from the borders) so only the subject projects. Non-destructive — toggle off to restore.">
                 <input type="checkbox" id="decal-bg-remove" /> Remove background
