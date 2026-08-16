@@ -226,6 +226,42 @@ export class Painter {
     this.adoptRefined(refined.positions, refined.triGroup, refined.blocked);
   }
 
+  /**
+   * Paint every triangle a classifier claims. classify(x,y,z,nx,ny,nz) returns
+   * the group index to paint at a point (with that triangle's normal), or -1.
+   * With opts.subdivide > 0 the mesh is first conformingly refined along the
+   * classification boundary (so coarse/lathe meshes get crisp regions) — that
+   * rebuilds geometry and clears undo history, exactly like the decal Detail
+   * path; without it the paint is a single undoable stroke. Used by curved
+   * text, but deliberately generic. Returns the number of triangles painted.
+   */
+  async applyRegionPaint(classify, opts = {}) {
+    if (!this.mesh) return 0;
+    const { subdivide = 0, inScope, triInScope, minEdge, maxEdge, onProgress } = opts;
+    if (subdivide) {
+      const bb = this.mesh.geometry.boundingBox;
+      const diag = bb.min.distanceTo(bb.max);
+      const minEdgeVal = minEdge ?? Math.max(0.15, diag * 0.003);
+      const refined = await refineMesh(
+        this.mesh.geometry.attributes.position.array,
+        this.triGroup, this.blocked, classify,
+        { maxRounds: subdivide, minEdge: minEdgeVal, inScope, triInScope, maxEdge, onProgress }
+      );
+      this.adoptRefined(refined.positions, refined.triGroup, refined.blocked);
+    }
+    const cen = this.triCentroids, N = this.triNormals;
+    if (!subdivide) this.beginStroke();
+    let applied = 0;
+    for (let t = 0; t < this.triCount; t++) {
+      const g = classify(cen[t * 3], cen[t * 3 + 1], cen[t * 3 + 2],
+        N[t * 3], N[t * 3 + 1], N[t * 3 + 2]);
+      if (g >= 0) { this._assign(t, g); applied++; }
+    }
+    if (!subdivide) this.endStroke();
+    this.mesh.geometry.attributes.color.needsUpdate = true;
+    return applied;
+  }
+
   /** Swap the stored values of an undo/redo entry with the current state. */
   _applySwap(s) {
     for (const [t, v] of s.group) {
@@ -352,6 +388,160 @@ export class Painter {
     }
     this.mesh.geometry.attributes.color.needsUpdate = true;
     return count;
+  }
+
+  /**
+   * Shortest path across the surface from one hit to another, as a chain of
+   * triangles: Dijkstra over the dual graph (nodes = triangles, edge weight =
+   * centroid-to-centroid distance). The path rides the surface, so it never
+   * tunnels through the solid the way a straight 3D chord does on a curve.
+   * Returns { triChain, polyPoints } where polyPoints is a surface-hugging
+   * polyline (start hit, shared-edge midpoints, end hit) for preview/refine,
+   * or null when the two hits sit on disconnected shells.
+   */
+  surfacePath(triA, pointA, triB, pointB) {
+    if (!this.mesh) return null;
+    if (triA === triB) {
+      return { triChain: [triA], polyPoints: [pointA.clone(), pointB.clone()] };
+    }
+    const N = this.triCount;
+    const cen = this.triCentroids;
+    const dist = new Float32Array(N).fill(Infinity);
+    const prev = new Int32Array(N).fill(-1);
+    const done = new Uint8Array(N);
+    const heap = new MinHeap(N);
+    dist[triA] = 0;
+    heap.push(0, triA);
+    while (heap.size) {
+      const [d, t] = heap.pop();
+      if (done[t]) continue;
+      done[t] = 1;
+      if (t === triB) break;
+      for (let e = 0; e < 3; e++) {
+        const n = this.adjacency[t * 3 + e];
+        if (n < 0 || done[n]) continue;
+        const dx = cen[t * 3] - cen[n * 3];
+        const dy = cen[t * 3 + 1] - cen[n * 3 + 1];
+        const dz = cen[t * 3 + 2] - cen[n * 3 + 2];
+        const nd = d + Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (nd < dist[n]) { dist[n] = nd; prev[n] = t; heap.push(nd, n); }
+      }
+    }
+    if (!isFinite(dist[triB])) return null; // disconnected shells
+    const triChain = [];
+    for (let t = triB; t !== -1; t = prev[t]) triChain.push(t);
+    triChain.reverse();
+    const polyPoints = [pointA.clone()];
+    for (let i = 0; i < triChain.length - 1; i++) {
+      const m = this._sharedEdgeMidpoint(triChain[i], triChain[i + 1]);
+      if (m) polyPoints.push(m);
+    }
+    polyPoints.push(pointB.clone());
+    return { triChain, polyPoints };
+  }
+
+  /** Midpoint of the edge shared by adjacent triangles t and n (world space). */
+  _sharedEdgeMidpoint(t, n) {
+    const pos = this.mesh.geometry.attributes.position;
+    for (let e = 0; e < 3; e++) {
+      if (this.adjacency[t * 3 + e] === n) {
+        const a = t * 3 + e, b = t * 3 + ((e + 1) % 3);
+        return new THREE.Vector3(
+          (pos.getX(a) + pos.getX(b)) / 2,
+          (pos.getY(a) + pos.getY(b)) / 2,
+          (pos.getZ(a) + pos.getZ(b)) / 2
+        );
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Paint (or block) a stripe hugging the surface: every triangle within
+   * geodesic distance width/2 of the seed triangle chain, measured by walking
+   * the adjacency graph. Unlike paintPolyline this can't reach the far side of
+   * a thin wall, because distance is accumulated along the surface. Caller
+   * manages the stroke (begin/endStroke).
+   */
+  paintSurfaceStripe(triChain, width, asBlocker = false) {
+    if (!this.mesh || !triChain.length) return 0;
+    const limit = width / 2;
+    const cen = this.triCentroids;
+    const dist = new Float32Array(this.triCount).fill(Infinity);
+    const painted = new Uint8Array(this.triCount);
+    const heap = new MinHeap(triChain.length + 16);
+    for (const t of triChain) {
+      if (dist[t] !== 0) { dist[t] = 0; heap.push(0, t); }
+    }
+    const group = this.activeGroup;
+    let count = 0;
+    while (heap.size) {
+      const [d, t] = heap.pop();
+      if (d > dist[t]) continue;
+      if (!painted[t]) {
+        painted[t] = 1;
+        if (asBlocker) this._setBlocked(t, 1);
+        else this._assign(t, group);
+        count++;
+      }
+      for (let e = 0; e < 3; e++) {
+        const n = this.adjacency[t * 3 + e];
+        if (n < 0) continue;
+        const dx = cen[t * 3] - cen[n * 3];
+        const dy = cen[t * 3 + 1] - cen[n * 3 + 1];
+        const dz = cen[t * 3 + 2] - cen[n * 3 + 2];
+        const nd = d + Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (nd <= limit && nd < dist[n]) { dist[n] = nd; heap.push(nd, n); }
+      }
+    }
+    this.mesh.geometry.attributes.color.needsUpdate = true;
+    return count;
+  }
+
+  /**
+   * Drape a straight segment a→b onto the surface by marching from a toward b
+   * in small steps, each snapped to the nearest surface point (BVH). Unlike the
+   * dual-graph geodesic in surfacePath, this works in continuous space, so it
+   * gives a visually-direct, surface-hugging path even on coarse or lathe
+   * (full-height sliver) meshes where centroid-graph geodesics collapse toward
+   * the triangle mid-heights. Returns the projected points and the seed
+   * triangles under them (for paintSurfaceStripe).
+   */
+  surfaceDrapeSegment(a, b, step) {
+    const bvh = this.mesh.geometry.boundsTree;
+    const geoIndex = this.mesh.geometry.index;
+    const target = {};
+    const snap = (p) => {
+      bvh.closestPointToPoint(p, target);
+      let face = target.faceIndex ?? 0;
+      if (geoIndex) face = geoIndex.getX(face * 3) / 3;
+      return { P: target.point ? target.point.clone() : p.clone(), face };
+    };
+    const drape = [];
+    const chain = [];
+    const push = (P, face) => {
+      drape.push(P);
+      if (!chain.length || chain[chain.length - 1] !== face) chain.push(face);
+    };
+    let cur = snap(a);
+    push(cur.P, cur.face);
+    const maxSteps = Math.ceil(a.distanceTo(b) / step) * 4 + 8;
+    for (let i = 0; i < maxSteps; i++) {
+      const toB = new THREE.Vector3().subVectors(b, cur.P);
+      const d = toB.length();
+      if (d <= step) break;
+      const f = cur.face;
+      const nx = this.triNormals[f * 3], ny = this.triNormals[f * 3 + 1], nz = this.triNormals[f * 3 + 2];
+      const dot = toB.x * nx + toB.y * ny + toB.z * nz;
+      toB.set(toB.x - dot * nx, toB.y - dot * ny, toB.z - dot * nz); // tangential
+      if (toB.lengthSq() < 1e-10) break;
+      toB.normalize();
+      cur = snap(cur.P.clone().addScaledVector(toB, step));
+      push(cur.P, cur.face);
+    }
+    const end = snap(b);
+    push(end.P, end.face);
+    return { drape, chain };
   }
 
   /** Paint (or erase, when erase=true) fill blockers under the brush. */

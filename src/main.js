@@ -5,6 +5,7 @@ import { exportMultiPart3MF, exportPainted3MF } from './export3mf.js';
 import { ProjectionSession, setDeshade } from './projection.js';
 import { removeBackground } from './imagebg.js';
 import { parse3MF } from './import3mf.js';
+import { rasterizeGlyphs, buildPlacements, buildTextClassifier, buildLevelBaseline, glyphsTotalMm } from './curvedtext.js';
 
 const viewer = new Viewer(document.getElementById('viewport'));
 const painter = new Painter();
@@ -19,7 +20,12 @@ let tool = 'brush';
 let brushRadius = 5;
 let fillAngle = 30;
 let lineWidth = 3;
-let linePoints = [];
+let linePoints = [];   // [{ point: Vector3, tri: faceIndex }] the user dropped
+let lineRedo = [];     // points removed by undo, awaiting redo
+let lineDrape = [];    // cached surface-hugging centerline for preview/commit
+let lineChain = null;  // cached geodesic triangle chain (Surface mode)
+let lineAllGeodesic = false; // false if any segment fell back to a straight chord
+let segCache = [];     // per-segment { drape, chain }, reused across point edits
 let modelName = 'model';
 
 // active pointer interaction: null | 'brush' | 'blocker' | 'scrub'
@@ -107,6 +113,7 @@ function setTool(name) {
     isBrushy || name === 'line' ? '' : 'none';
   document.getElementById('fill-angle-wrap').style.display = name === 'fill' ? '' : 'none';
   document.getElementById('line-width-wrap').style.display = name === 'line' ? '' : 'none';
+  document.getElementById('line-surface-wrap').style.display = name === 'line' ? '' : 'none';
   document.getElementById('line-actions').style.display = name === 'line' ? '' : 'none';
   if (name === 'brush') setStatus('Brush: drag to paint, Alt-drag to erase back to base.');
   if (name === 'blocker') setStatus('Blocker: drag to paint fill barriers, Alt-drag to erase them.');
@@ -132,26 +139,124 @@ document.getElementById('line-width').addEventListener('input', (e) => {
 
 // ---- line tool ----
 
+function surfaceMode() {
+  return document.getElementById('line-surface').checked;
+}
+
+/** Surface-hugging path for one segment a→b: march the chord across the
+ *  surface (works on lathe/sliver meshes, no dual-graph geodesic detours). */
+function computeSegment(a, b) {
+  const step = Math.max(0.3, lineWidth / 2);
+  return painter.surfaceDrapeSegment(a.point, b.point, step);
+}
+
+/**
+ * Recompute the stripe centerline from the dropped points. In Surface mode
+ * each segment between consecutive points is a geodesic drape over the mesh
+ * (so it can't tunnel under a curve); in Straight mode it's the raw chord.
+ * Per-segment results are cached in segCache — points are only ever added or
+ * removed at the tail, so only the new tail segment runs a fresh Dijkstra;
+ * the rest are reused, which keeps big meshes responsive as points pile up.
+ * Sets lineDrape, lineChain, and lineAllGeodesic (false if any segment fell
+ * back to a straight chord — commit then paints the drape directly).
+ */
+function rebuildLinePath() {
+  const surface = surfaceMode();
+  if (!surface || linePoints.length < 2 || !painter.mesh) {
+    lineDrape = linePoints.map((p) => p.point.clone());
+    lineChain = null;
+    lineAllGeodesic = false;
+    segCache = [];
+    return;
+  }
+  const need = linePoints.length - 1;
+  if (segCache.length > need) segCache.length = need; // a point was removed
+  for (let i = 0; i < need; i++) {
+    if (!segCache[i]) segCache[i] = computeSegment(linePoints[i], linePoints[i + 1]);
+  }
+  const drape = [];
+  const chain = [];
+  let allGeodesic = true;
+  for (const seg of segCache) {
+    const start = drape.length ? 1 : 0; // skip the shared junction point
+    for (let k = start; k < seg.drape.length; k++) drape.push(seg.drape[k]);
+    if (seg.chain) {
+      for (const t of seg.chain) {
+        if (!chain.length || chain[chain.length - 1] !== t) chain.push(t);
+      }
+    } else {
+      allGeodesic = false;
+    }
+  }
+  lineDrape = drape;
+  lineChain = chain.length ? chain : null;
+  lineAllGeodesic = allGeodesic;
+}
+
+/** Remove the last dropped point (Backspace / Ctrl+Z), keeping it for redo. */
+function removeLastLinePoint() {
+  if (!linePoints.length) return false;
+  lineRedo.push(linePoints.pop());
+  rebuildLinePath();
+  refreshLinePreview();
+  return true;
+}
+
+/** Restore the most recently removed point (Ctrl+Y / Ctrl+Shift+Z). */
+function restoreLinePoint() {
+  if (!lineRedo.length) return false;
+  linePoints.push(lineRedo.pop());
+  rebuildLinePath();
+  refreshLinePreview();
+  return true;
+}
+
 function refreshLinePreview() {
   const colorHex = parseInt(painter.groups[painter.activeGroup].color.slice(1), 16);
-  viewer.setPolylinePreview(linePoints, lineWidth, colorHex);
+  viewer.setPolylinePreview(
+    linePoints.map((p) => p.point), lineDrape, lineWidth, colorHex);
+}
+
+/** True when most triangles the line crosses are much larger than the line
+ *  width (coarse/lathe sliver mesh), so whole-triangle painting spills into a
+ *  band and Crisp edges is worth suggesting. */
+function stripeLooksBanded(chain, width) {
+  if (!chain || !chain.length) return false;
+  const pos = painter.mesh.geometry.attributes.position.array;
+  let over = 0;
+  for (const t of chain) {
+    const o = t * 9;
+    const e = (i, j) => Math.hypot(
+      pos[o + i] - pos[o + j], pos[o + i + 1] - pos[o + j + 1], pos[o + i + 2] - pos[o + j + 2]);
+    if (Math.max(e(0, 3), e(3, 6), e(0, 6)) > width * 2.5) over++;
+  }
+  return over / chain.length > 0.5;
 }
 
 function clearLine() {
   linePoints = [];
+  lineRedo = [];
+  lineDrape = [];
+  lineChain = null;
+  lineAllGeodesic = false;
+  segCache = [];
   viewer.clearPolylinePreview();
 }
 
 async function commitLine(asBlocker) {
   if (!painter.mesh || !linePoints.length || refining) return;
+  rebuildLinePath();
   if (document.getElementById('stroke-subdiv').checked) {
     refining = true;
     try {
-      await painter.refineStroke(linePoints, lineWidth / 2, {
+      // subdivision rebuilds the mesh, so the geodesic chain is invalidated;
+      // the draped polyline is on the surface, so a straight-segment repaint of
+      // it no longer tunnels
+      await painter.refineStroke(lineDrape, lineWidth / 2, {
         rounds: 3,
         onProgress: (f) => setStatus(`Refining line edges — ${Math.round(f * 100)}%…`),
       });
-      const n = painter.paintPolyline(linePoints, lineWidth, asBlocker);
+      const n = painter.paintPolyline(lineDrape, lineWidth, asBlocker);
       setStatus(`${asBlocker ? 'Blocked' : 'Painted'} ${n} triangles along the line with crisp edges — mesh now ${painter.triCount.toLocaleString()} triangles (undo history cleared).`);
     } catch (err) {
       console.error(err);
@@ -161,14 +266,30 @@ async function commitLine(asBlocker) {
     }
   } else {
     painter.beginStroke();
-    const n = painter.paintPolyline(linePoints, lineWidth, asBlocker);
+    // surface stripe when every segment draped on the surface; otherwise the
+    // on-surface drape (covers straight-fallback segments too)
+    const n = (surfaceMode() && lineChain && lineAllGeodesic)
+      ? painter.paintSurfaceStripe(lineChain, lineWidth, asBlocker)
+      : painter.paintPolyline(lineDrape, lineWidth, asBlocker);
     painter.endStroke();
-    setStatus(asBlocker
+    // whole-triangle painting on a coarse/lathe (sliver) mesh spills the stripe
+    // across full-height triangles — hint that Crisp edges gives a clean line
+    const coarse = surfaceMode() && n > 0 && stripeLooksBanded(lineChain, lineWidth);
+    const tip = coarse ? ' Line too thick? Tick “Crisp edges” for a clean line on coarse/lathe meshes.' : '';
+    setStatus((asBlocker
       ? `Blocked ${n} triangles along the line.`
-      : `Painted ${n} triangles along the line with "${painter.groups[painter.activeGroup].name}".`);
+      : `Painted ${n} triangles along the line with "${painter.groups[painter.activeGroup].name}".`) + tip);
   }
   clearLine();
 }
+
+document.getElementById('line-surface').addEventListener('change', () => {
+  rebuildLinePath();
+  refreshLinePreview();
+  setStatus(surfaceMode()
+    ? 'Line: stripe clings to the surface between points.'
+    : 'Line: straight chords between points (may cut under curves).');
+});
 
 document.getElementById('btn-line-paint').addEventListener('click', () => commitLine(false));
 document.getElementById('btn-line-block').addEventListener('click', () => commitLine(true));
@@ -315,12 +436,11 @@ document.getElementById('decal-opacity').addEventListener('input', (e) => {
 document.getElementById('btn-decal-load').addEventListener('click', () => {
   document.getElementById('decal-file').click();
 });
-document.getElementById('decal-file').addEventListener('change', async () => {
-  const file = document.getElementById('decal-file').files[0];
-  document.getElementById('decal-file').value = '';
-  if (!file) return;
-  decal.originalImg = await createImageBitmap(file);
-  decal.originalUrl = URL.createObjectURL(file);
+/** Show a loaded image/text bitmap in the decal overlay, wiring the existing
+ *  background-removal + apply controls. */
+async function presentDecal(originalImg, originalUrl, statusMsg) {
+  decal.originalImg = originalImg;
+  decal.originalUrl = originalUrl;
   // fresh image, fresh choices — a stale toggle from a previous image can
   // silently swallow whole color regions
   document.getElementById('decal-bg-remove').checked = false;
@@ -329,7 +449,223 @@ document.getElementById('decal-file').addEventListener('change', async () => {
   decalOv.style.display = 'block';
   decalOv.style.opacity = document.getElementById('decal-opacity').value / 100;
   resetDecal();
-  setStatus('Decal loaded — drag to position, corner/scroll to resize, then Apply. Orbit the model behind it as needed.');
+  setStatus(statusMsg);
+}
+
+document.getElementById('decal-file').addEventListener('change', async () => {
+  const file = document.getElementById('decal-file').files[0];
+  document.getElementById('decal-file').value = '';
+  if (!file) return;
+  const bmp = await createImageBitmap(file);
+  await presentDecal(bmp, URL.createObjectURL(file),
+    'Decal loaded — drag to position, corner/scroll to resize, then Apply. Orbit the model behind it as needed.');
+});
+
+// ---- text decal ----
+
+const GENERIC_FONTS = ['sans-serif', 'serif', 'monospace', 'cursive', 'fantasy'];
+const FALLBACK_FONTS = [
+  'Arial', 'Helvetica', 'Verdana', 'Trebuchet MS', 'Tahoma', 'Georgia',
+  'Times New Roman', 'Courier New', 'Impact', 'Comic Sans MS',
+  ...GENERIC_FONTS,
+];
+
+function fillFontOptions(families) {
+  const sel = document.getElementById('text-font');
+  const prev = sel.value;
+  sel.innerHTML = '';
+  for (const fam of families) {
+    const o = document.createElement('option');
+    o.value = fam;
+    o.textContent = fam;
+    sel.append(o);
+  }
+  if (families.includes(prev)) sel.value = prev;
+}
+fillFontOptions(FALLBACK_FONTS);
+
+// Read the user's actually-installed fonts via the Local Font Access API.
+// It needs a user gesture + permission, so it's behind the ⟳ button and falls
+// back to the common-font list when unavailable or denied.
+document.getElementById('btn-text-fonts').addEventListener('click', async () => {
+  if (!window.queryLocalFonts) {
+    setStatus('This browser can’t enumerate system fonts (Chrome/Edge only) — using the common-font list.');
+    return;
+  }
+  try {
+    const fonts = await window.queryLocalFonts();
+    const fams = [...new Set(fonts.map((f) => f.family))].sort((a, b) => a.localeCompare(b));
+    if (!fams.length) return setStatus('No system fonts returned — keeping the common-font list.');
+    fillFontOptions([...fams, ...GENERIC_FONTS]);
+    setStatus(`Loaded ${fams.length} installed font(s).`);
+  } catch {
+    setStatus('Font access was denied — using the common-font list.');
+  }
+});
+
+/** CSS font-family token: generics bare, everything else quoted. */
+function cssFontFamily(family) {
+  return GENERIC_FONTS.includes(family) ? family : JSON.stringify(family);
+}
+
+/** Rasterize text to a transparent canvas, filled in the active filament
+ *  color, ready to feed the decal projection pipeline. */
+function buildTextCanvas(text, family, bold, italic, color) {
+  const fontSize = 160; // high raster res; on-model size is set by the overlay
+  const font = `${italic ? 'italic ' : ''}${bold ? 'bold ' : ''}${fontSize}px ${cssFontFamily(family)}`;
+  const meas = document.createElement('canvas').getContext('2d');
+  meas.font = font;
+  const lines = text.split('\n');
+  let maxW = 1;
+  for (const ln of lines) maxW = Math.max(maxW, meas.measureText(ln).width);
+  const lineH = fontSize * 1.28;
+  const pad = fontSize * 0.28;
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.ceil(maxW + pad * 2);
+  canvas.height = Math.ceil(lineH * lines.length + pad * 2);
+  const ctx = canvas.getContext('2d');
+  ctx.font = font;
+  ctx.textBaseline = 'top';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = color;
+  for (let i = 0; i < lines.length; i++) {
+    ctx.fillText(lines[i], canvas.width / 2, pad + i * lineH);
+  }
+  return canvas;
+}
+
+document.getElementById('btn-text-create').addEventListener('click', async () => {
+  const text = document.getElementById('text-input').value.trim();
+  if (!text) return setStatus('Type some text first.');
+  const family = document.getElementById('text-font').value || 'sans-serif';
+  // make sure the chosen font is actually loaded before we rasterize
+  try { await document.fonts.load(`160px ${cssFontFamily(family)}`); } catch { /* generic/system font */ }
+  if (document.getElementById('text-wrap').checked) return startTextPlacement(text, family);
+  const color = painter.groups[painter.activeGroup].color;
+  const canvas = buildTextCanvas(
+    text, family,
+    document.getElementById('text-bold').checked,
+    document.getElementById('text-italic').checked,
+    color
+  );
+  const bmp = await createImageBitmap(canvas);
+  await presentDecal(bmp, canvas.toDataURL(),
+    `Text decal created in "${painter.groups[painter.activeGroup].name}" — position it over the model, then Apply decal.`);
+});
+
+// ---- curved (per-glyph "use surface") text ----
+
+let textPlacing = false;
+let textAnchor = null;  // { point, tri } single placement click (Orca-style)
+let textLayout = null;  // pre-rasterized glyphs for the placement in progress
+
+document.getElementById('text-wrap').addEventListener('change', () => {
+  const on = document.getElementById('text-wrap').checked;
+  document.getElementById('text-height-wrap').style.display = on ? '' : 'none';
+  document.getElementById('text-rot-wrap').style.display = on ? '' : 'none';
+  document.getElementById('text-detail-wrap').style.display = on ? '' : 'none';
+  document.getElementById('btn-text-create').textContent = on ? 'Place curved text…' : 'Create text decal';
+  document.getElementById('text-hint').textContent = on
+    ? 'Click once on the model to place text; it wraps level around the surface (Orca-style), each glyph in its own frame. Rotation tilts the baseline; Detail sets edge crispness.'
+    : 'Renders your text as a decal in the active filament color. Position it over the model, then Apply decal below. Works on flat and gently curved faces.';
+});
+
+document.getElementById('text-rot').addEventListener('input', (e) => {
+  document.getElementById('text-rot-val').textContent = e.target.value + '°';
+  refreshTextBaseline();
+});
+
+function startTextPlacement(text, family) {
+  if (!painter.mesh) return setStatus('Open a model first.');
+  textLayout = rasterizeGlyphs(text, {
+    family,
+    bold: document.getElementById('text-bold').checked,
+    italic: document.getElementById('text-italic').checked,
+  });
+  textPlacing = true;
+  textAnchor = null;
+  document.getElementById('text-place-actions').style.display = '';
+  document.getElementById('text-place-hint').style.display = '';
+  document.getElementById('btn-text-create').style.display = 'none';
+  viewer.clearPolylinePreview();
+  setStatus('Curved text: click once on the model to place the text, then "Apply curved text".');
+}
+
+/** Level baseline polyline for the current anchor + rotation, or null. */
+function currentTextBaseline() {
+  if (!textAnchor || !textLayout) return null;
+  const heightMm = parseFloat(document.getElementById('text-height').value) || 10;
+  const lengthMm = glyphsTotalMm(textLayout, heightMm);
+  return buildLevelBaseline(painter.mesh, painter.triNormals, textAnchor, {
+    rotationDeg: parseFloat(document.getElementById('text-rot').value) || 0,
+    lengthMm,
+  });
+}
+
+function refreshTextBaseline() {
+  if (!textPlacing) return;
+  const heightMm = parseFloat(document.getElementById('text-height').value) || 10;
+  const baseline = currentTextBaseline();
+  if (!baseline) { viewer.clearPolylinePreview(); return; }
+  const colorHex = parseInt(painter.groups[painter.activeGroup].color.slice(1), 16);
+  viewer.setPolylinePreview([textAnchor.point], baseline, heightMm, colorHex);
+}
+
+function endTextPlacement() {
+  textPlacing = false;
+  textAnchor = null;
+  textLayout = null;
+  document.getElementById('text-place-actions').style.display = 'none';
+  document.getElementById('text-place-hint').style.display = 'none';
+  document.getElementById('btn-text-create').style.display = '';
+  viewer.clearPolylinePreview();
+}
+
+document.getElementById('btn-text-cancel').addEventListener('click', () => {
+  endTextPlacement();
+  setStatus('Curved text cancelled.');
+});
+
+document.getElementById('btn-text-apply').addEventListener('click', async () => {
+  if (!textPlacing || !textAnchor) {
+    return setStatus('Click once on the model to place the text first.');
+  }
+  const heightMm = parseFloat(document.getElementById('text-height').value) || 10;
+  const baseline = currentTextBaseline();
+  const placements = buildPlacements(textLayout, baseline, heightMm, painter.mesh, painter.triNormals);
+  if (!placements.length) return setStatus('No printable glyphs to place.');
+  const group = painter.activeGroup;
+  const { classify, inScope, triInScope } = buildTextClassifier(placements, group, heightMm);
+  const subdivide = parseInt(document.getElementById('text-subdiv').value, 10);
+  const layout = textLayout, anchor = textAnchor;
+  document.getElementById('btn-text-apply').disabled = true;
+  setStatus('Applying curved text…');
+  try {
+    const applied = await painter.applyRegionPaint(classify, {
+      subdivide,
+      inScope,
+      triInScope,
+      // start phase-1 near the stroke width (~height/8), not the glyph height,
+      // so thin crossbars survive the boundary refinement
+      maxEdge: Math.max(0.6, heightMm * 0.22),
+      onProgress: (f, phase) => setStatus(`Applying curved text — ${phase || ''} ${Math.round(f * 100)}%…`),
+    });
+    if (applied === 0) {
+      setStatus('Curved text landed nothing — try a larger Height or a Detail level of Fine+.');
+    } else {
+      setStatus(`Curved text applied: ${applied} triangles painted in "${painter.groups[group].name}"` +
+        (subdivide
+          ? ` — mesh now ${painter.triCount.toLocaleString()} triangles (undo history cleared).`
+          : ' (Ctrl+Z to undo).'));
+    }
+    endTextPlacement();
+  } catch (err) {
+    console.error(err);
+    setStatus(`Curved text failed: ${err.message}`);
+    textLayout = layout; textAnchor = anchor; // keep the placement so they can retry
+  } finally {
+    document.getElementById('btn-text-apply').disabled = false;
+  }
 });
 
 // ---- decal background removal (non-destructive: always from the original) ----
@@ -551,6 +887,12 @@ window.addEventListener('keydown', (e) => {
     e.preventDefault();
     return;
   }
+  if (e.key === 'Escape' && textPlacing) {
+    endTextPlacement();
+    setStatus('Curved text cancelled.');
+    e.preventDefault();
+    return;
+  }
   const k = e.key.toLowerCase();
   if (k === 'b') setTool('brush');
   if (k === 'f') setTool('fill');
@@ -558,21 +900,33 @@ window.addEventListener('keydown', (e) => {
   if (k === 'x') setTool('blocker');
   if (k === 'l') setTool('line');
   if (e.key === 'Backspace' && tool === 'line' && linePoints.length) {
-    linePoints.pop();
-    refreshLinePreview();
-    setStatus(`Removed last point — ${linePoints.length} left.`);
+    removeLastLinePoint();
+    setStatus(`Removed last point — ${linePoints.length} left${lineRedo.length ? ' (Ctrl+Y to restore)' : ''}.`);
     e.preventDefault();
+    return;
   }
   if (e.key === '[') adjustBrush(-1);
   if (e.key === ']') adjustBrush(1);
   if (e.key === '+' || e.key === '=') doGrow();
   if (e.key === '-') doShrink();
   if ((e.ctrlKey || e.metaKey) && k === 'z' && !e.shiftKey) {
-    if (painter.undo()) setStatus('Undid stroke.');
+    // while a line is being placed, Ctrl+Z removes the last point instead of
+    // undoing the previous committed stroke
+    if (tool === 'line' && linePoints.length) {
+      removeLastLinePoint();
+      setStatus(`Removed last point — ${linePoints.length} left${lineRedo.length ? ' (Ctrl+Y to restore)' : ''}.`);
+    } else if (painter.undo()) {
+      setStatus('Undid stroke.');
+    }
     e.preventDefault();
   }
   if ((e.ctrlKey || e.metaKey) && (k === 'y' || (k === 'z' && e.shiftKey))) {
-    if (painter.redo()) setStatus('Redid stroke.');
+    if (tool === 'line' && lineRedo.length) {
+      restoreLinePoint();
+      setStatus(`Restored point — ${linePoints.length} placed.`);
+    } else if (painter.redo()) {
+      setStatus('Redid stroke.');
+    }
     e.preventDefault();
   }
   const n = parseInt(e.key, 10);
@@ -596,8 +950,16 @@ canvas.addEventListener('pointerdown', (e) => {
   if (e.button !== 0 || !painter.mesh || refining) return;
   const hit = viewer.pick(e);
   if (!hit) return;
+  if (textPlacing) {
+    textAnchor = { point: hit.point.clone(), tri: hit.faceIndex };
+    refreshTextBaseline();
+    setStatus('Curved text placed — adjust Rotation, click again to move it, or "Apply curved text".');
+    return;
+  }
   if (tool === 'line') {
-    linePoints.push(hit.point.clone());
+    lineRedo = []; // a fresh point starts a new branch
+    linePoints.push({ point: hit.point.clone(), tri: hit.faceIndex });
+    rebuildLinePath();
     refreshLinePreview();
     setStatus(`Line: ${linePoints.length} point(s). Commit with "Paint line" or "Block line".`);
     return;

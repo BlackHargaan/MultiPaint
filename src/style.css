@@ -175,6 +175,40 @@ main {
 .proj-opt input[type="range"] { flex: 1; min-width: 0; }
 .proj-select { flex: 1; min-width: 0; padding: 4px 6px; font-size: 12px; }
 
+#text-decal { margin-bottom: 6px; }
+#text-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 5px 7px;
+  margin-bottom: 6px;
+  background: #1b1d21;
+  border: 1px solid #3a3f46;
+  border-radius: 4px;
+  color: #d8dadf;
+  font-size: 13px;
+}
+#text-input:focus { outline: none; border-color: #6fc3ff; }
+#text-font-row { display: flex; gap: 6px; margin-bottom: 6px; }
+#text-font-row #btn-text-fonts {
+  width: auto;
+  flex: 0 0 auto;
+  margin-bottom: 0;
+  padding: 4px 9px;
+}
+#text-style-row {
+  display: flex;
+  gap: 14px;
+  font-size: 12px;
+  color: #9aa0a8;
+  margin-bottom: 6px;
+}
+#text-style-row label { display: flex; align-items: center; gap: 5px; }
+#text-height { width: 64px; padding: 3px 5px; background: #1b1d21; border: 1px solid #3a3f46; border-radius: 4px; color: #d8dadf; font-size: 12px; }
+#text-place-actions { display: flex; gap: 6px; margin-bottom: 6px; }
+#text-place-actions button { width: auto; flex: 1; margin-bottom: 0; text-align: center; }
+#btn-text-apply { background: #2f7d4f; }
+#btn-text-apply:hover { background: #36934f; }
+
 .proj-sep {
   border: none;
   border-top: 1px solid #3a3f46;

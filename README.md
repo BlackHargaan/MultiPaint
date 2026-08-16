@@ -39,8 +39,8 @@ remembered between sessions automatically.
 | `Home` / Numpad `0` | Home (three-quarter) view |
 | Numpad `1`/`3`/`7` | Front / Right / Top view (`Ctrl` for Back / Left / Bottom) |
 | Numpad `5` | Toggle orthographic / perspective |
-| `Ctrl+Z` | Undo stroke |
-| `Ctrl+Y` / `Ctrl+Shift+Z` | Redo stroke |
+| `Ctrl+Z` | Undo stroke — or, while placing a line, remove the last point |
+| `Ctrl+Y` / `Ctrl+Shift+Z` | Redo stroke — or restore a removed line point |
 
 View preset buttons (Front/Back/Left/Right/Top/Bottom + Ortho) sit in the
 top-left corner of the viewport. After saving a snapshot, **↩ Return to
@@ -52,11 +52,20 @@ taken — handy for checking the projection result or re-shooting.
 - **Brush** — paints triangles within a radius, walking the surface from the
   hit point so it never bleeds through thin walls onto the far side. Alt-drag
   erases back to the base color.
-- **Line** — click to drop points connected by straight segments (previewed
-  as a translucent capsule chain at true width, like a Blender spline).
-  Adjust *Line width* any time, Backspace removes the last point, then commit
-  with **Paint line** (active color) or **Block line** (fill barrier) — the
-  latter is ideal for fencing off an emblem before filling it.
+- **Line** — click to drop points connected along the surface (previewed as a
+  translucent capsule chain at true width, like a Blender spline). With **Cling
+  to surface** on (default) each segment is draped onto the mesh by marching the
+  straight chord across the surface a step at a time, so the stripe follows
+  curvature (no diving under faces) while staying visually direct — it does
+  *not* take the long way around the way a dual-graph geodesic does, and it
+  stays put on lathe/sliver meshes (cups, coolers) instead of sagging toward the
+  triangle mid-heights. Turn it off for a straight 3D chord (e.g. to bridge a
+  gap). On coarse or lathe meshes, whole-triangle painting spills the stripe
+  into a band; tick **Crisp edges** to subdivide along the stroke for a clean,
+  thin line (the app hints this when it detects it). Adjust *Line width* any
+  time; Backspace or `Ctrl+Z` removes the last point and `Ctrl+Y` restores it,
+  then commit with **Paint line** (active color) or **Block line** (fill
+  barrier) — the latter is ideal for fencing off an emblem before filling it.
 - **Smart Fill** — scrubbable priority flood. Click to fill, then *keep the
   button held and drag right/left* to grow or shrink the fill in real time.
   The fill expands across the cheapest edges first: flat surface is free,
@@ -116,6 +125,29 @@ Two ways to paint in 2D and apply in 3D (sidebar, bottom section):
    neighbors stay stitched, no T-junctions, the mesh stays watertight for
    export. Note: subdividing rebuilds the mesh and clears the undo history;
    set Detail to "Off" for a normal undoable apply.
+
+**Text decal:** type text, pick a font, optionally Bold/Italic, and **Create
+text decal** — the text is rasterized in the active filament color and dropped
+into the same overlay, so you position and **Apply** it exactly like an image
+decal (with the same Detail/subdivision for crisp letters). The font list
+starts with common families; the **⟳** button loads your actually-installed
+system fonts via the browser's Local Font Access API (Chrome/Edge, asks
+permission — falls back to the common list elsewhere). Best on flat and gently
+curved faces today; per-glyph wrap around cylinders is planned.
+
+**Curved text (per-glyph, "use surface"):** tick **Wrap on surface (per
+glyph)**, set a **Height (mm)**, click **Place curved text…**, then click
+**once** on the model to place the text and **Apply**. Like Orca's "use
+surface / per glyph", the text lays along a **level baseline that wraps around
+the model at constant height** — the advance direction is re-leveled to the
+horizontal surface tangent at every step, so it stays flat and upright on a
+cone or cylinder instead of drifting along a geodesic. Each glyph then projects
+in its own surface tangent frame, undistorted. **Rotation** tilts the baseline
+in the surface plane; click again to reposition; the preview updates live.
+**Detail** subdivides along the glyph edges for crisp letters on coarse/lathe
+meshes (like the decal Detail; above Off it rebuilds geometry and clears undo).
+Esc or **Cancel** aborts. Thin-stroke text wants Finest/Ultra; raise Height if
+letters come out chunky.
 
 **Snapshot round-trip (for AI-editing an exact view, WIP):**
 
