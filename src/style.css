@@ -155,6 +155,36 @@ main {
 
 #btn-add-group { width: 100%; margin-top: 6px; }
 
+/* object shelf */
+#object-list { margin-bottom: 6px; }
+.object-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 6px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  margin-bottom: 4px;
+}
+.object-row:hover { background: #2d3138; }
+.object-row.active { border-color: #6fc3ff; background: #2a3a4a; }
+.object-name {
+  flex: 1;
+  min-width: 0;
+  color: #d8dadf;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.object-meta { font-size: 11px; color: #8a919b; white-space: nowrap; }
+.object-icon { background: none; border: none; color: #777; padding: 2px 5px; font-size: 12px; }
+.object-icon:hover { color: #cfd3d9; }
+.object-icon.del:hover { color: #ff7b7b; }
+#btn-split-shells { width: 100%; }
+#btn-append { }
+
 #sidebar h3:not(:first-child) { margin-top: 18px; }
 #projection button {
   width: 100%;

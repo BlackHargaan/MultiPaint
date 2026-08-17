@@ -861,6 +861,43 @@ export class Painter {
   }
 }
 
+/**
+ * Build the per-triangle caches a Painter needs for a geometry, without
+ * touching any live Painter — used to prepare shelved objects. Mirrors what
+ * setMesh() computes internally.
+ */
+export function buildMeshCaches(geometry) {
+  return {
+    triCount: geometry.attributes.position.count / 3,
+    adjacency: buildAdjacency(geometry),
+    triNormals: computeTriNormals(geometry),
+    triCentroids: computeTriCentroids(geometry),
+  };
+}
+
+/** Connected-component labels over the adjacency graph (disconnected shells).
+ *  Returns { comp: Int32Array (component id per triangle), count }. */
+export function connectedComponents(adjacency, triCount) {
+  const comp = new Int32Array(triCount).fill(-1);
+  let count = 0;
+  const stack = [];
+  for (let s = 0; s < triCount; s++) {
+    if (comp[s] >= 0) continue;
+    const id = count++;
+    comp[s] = id;
+    stack.length = 0;
+    stack.push(s);
+    while (stack.length) {
+      const t = stack.pop();
+      for (let e = 0; e < 3; e++) {
+        const n = adjacency[t * 3 + e];
+        if (n >= 0 && comp[n] < 0) { comp[n] = id; stack.push(n); }
+      }
+    }
+  }
+  return { comp, count };
+}
+
 /** Binary min-heap of (cost, id) pairs. */
 class MinHeap {
   constructor(capacity = 64) {

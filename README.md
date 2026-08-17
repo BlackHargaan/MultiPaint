@@ -190,27 +190,41 @@ cutoff then protects unedited shaded areas).
 Repeat from 2–3 angles to cover the whole model; grazing and hidden
 triangles are deliberately left for the next view.
 
+## Multiple objects (the shelf)
+
+A file (or several) can hold more than one object, and MultiPaint keeps them
+separate instead of merging them into one blob:
+
+- **Multi-object 3MF** imports as one shelf entry per build item.
+- **+ Append** (top bar) adds another file's objects to the current shelf, so
+  you can assemble a plate from several STL/3MF files.
+- **Split into parts** (Objects panel) breaks the active object's disconnected
+  shells into separate objects via the adjacency graph — e.g. a print that's
+  actually several loose pieces.
+
+The **Objects** panel lists them; click one to edit it (its paint, undo history
+and mesh are shelved and swapped back when you return), rename, duplicate, or
+remove. The filament palette is shared across all objects, so slot 1 is the
+same filament everywhere. Paint each object, then **Export 3MF** writes them
+**all** as one multi-object file — each object a distinct, already-painted piece
+at its original position — so the slicer opens the whole plate ready to go, no
+Blender/slicer round-trip to split and re-paint.
+
 ## How the export works
 
-**Painted model (default, recommended):** the mesh is exported as a single
-untouched solid with per-triangle `paint_color` attributes — the exact
-mechanism Orca/Bambu Studio use for their own painting tool (BambuStudio
-`TriangleSelector` encoding: filament slot N → state N; `"4"`/`"8"`/`"0C"`/
-`"1C"`… per triangle). Geometry is bit-identical to the input model, so the
-export cannot introduce non-manifold edges or empty layers. The model imports
-as one object, already painted; unpainted (Base) faces print on slot 1.
-
-**Separate parts:** each filament group's triangles become a separate mesh
-part inside one object, with `Metadata/model_settings.config` pre-assigning
-each part's filament slot. Use this only when your groups are genuinely
-separate closed shells (e.g. a figure and its base); for painted-on surface
-regions the parts are open zero-thickness patches, which slicers have to
-repair — producing exactly the empty layers / non-manifold edges the painted
-mode avoids.
+The shelf is exported as one 3MF with **each object as its own build item**,
+carrying per-triangle `paint_color` attributes — the exact mechanism Orca/Bambu
+Studio use for their own painting tool (BambuStudio `TriangleSelector`
+encoding: filament slot N → state N; `"4"`/`"8"`/`"0C"`/`"1C"`… per triangle).
+Each object's geometry is written untouched at its original world position, so
+the export can't introduce non-manifold edges or empty layers, and the objects
+land where they belong on the plate. Unpainted (Base) faces print on slot 1.
 
 ## Architecture
 
-- `src/viewer.js` — Three.js scene, STL loading, BVH-accelerated picking
-- `src/painter.js` — per-triangle group model, adjacency, paint tools, undo
-- `src/export3mf.js` — multi-part 3MF writer (no Three.js dependency)
-- `src/main.js` — UI wiring
+- `src/viewer.js` — Three.js scene, STL parsing, geometry prep, BVH picking
+- `src/painter.js` — per-triangle group model, adjacency, paint tools, undo,
+  mirror, mesh-cache/connected-component helpers for the shelf
+- `src/import3mf.js` — multi-object 3MF reader (paint + settings)
+- `src/export3mf.js` — multi-object painted 3MF writer (no Three.js dependency)
+- `src/main.js` — UI wiring and the object shelf (activate/snapshot/split)

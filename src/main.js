@@ -1,7 +1,7 @@
 import './style.css';
 import { Viewer } from './viewer.js';
-import { Painter } from './painter.js';
-import { exportMultiPart3MF, exportPainted3MF } from './export3mf.js';
+import { Painter, buildMeshCaches, connectedComponents } from './painter.js';
+import { exportProject3MF } from './export3mf.js';
 import { ProjectionSession, setDeshade } from './projection.js';
 import { removeBackground } from './imagebg.js';
 import { parse3MF } from './import3mf.js';
@@ -27,6 +27,15 @@ let lineChain = null;  // cached geodesic triangle chain (Surface mode)
 let lineAllGeodesic = false; // false if any segment fell back to a straight chord
 let segCache = [];     // per-segment { drape, chain }, reused across point edits
 let modelName = 'model';
+
+// ---- multi-object project ("shelf") ----
+// Each object is a self-contained paint state; one is active (bound to the
+// Painter), the rest are shelved. Switching swaps state in/out of the Painter.
+let objects = [];      // [{ id, name, geometry, triGroup, blocked, adjacency,
+                       //    triNormals, triCentroids, triCount, undoStack,
+                       //    redoStack, origin }]
+let activeId = null;
+let nextObjId = 1;
 
 // active pointer interaction: null | 'brush' | 'blocker' | 'scrub'
 let dragMode = null;
@@ -58,49 +67,248 @@ viewport.addEventListener('drop', async (e) => {
   if (file && /\.(stl|3mf)$/i.test(file.name)) await loadFile(file);
 });
 
-async function loadFile(file) {
-  setStatus(`Loading ${file.name}…`);
+/** Save the live Painter state back into the active object entry. */
+function snapshotActive() {
+  if (activeId == null || !painter.mesh) return;
+  const o = objects.find((o) => o.id === activeId);
+  if (!o) return;
+  o.geometry = painter.mesh.geometry;
+  o.triGroup = painter.triGroup;
+  o.blocked = painter.blocked;
+  o.adjacency = painter.adjacency;
+  o.triNormals = painter.triNormals;
+  o.triCentroids = painter.triCentroids;
+  o.triCount = painter.triCount;
+  o.undoStack = painter.undoStack;
+  o.redoStack = painter.redoStack;
+}
+
+/** Make object `id` active: shelve the current one and bind the Painter to it. */
+function activate(id, { frame = false } = {}) {
+  const o = objects.find((o) => o.id === id);
+  if (!o) return;
+  if (id !== activeId) snapshotActive();
+  activeId = id;
+  viewer.installGeometry(o.geometry, frame);
+  painter.mesh = viewer.mesh;
+  painter.triGroup = o.triGroup;
+  painter.blocked = o.blocked;
+  painter.adjacency = o.adjacency;
+  painter.triNormals = o.triNormals;
+  painter.triCentroids = o.triCentroids;
+  painter.triCount = o.triCount;
+  painter.undoStack = o.undoStack;
+  painter.redoStack = o.redoStack;
+  painter._scrubs = null;
+  painter._strokeChanges = null;
+  if (painter.mirrorAxis) painter.setSymmetry(painter.mirrorAxis);
+  viewer.setMirrorPlane(painter.mirrorAxis);
+  painter.repaintAll();
+  clearLine();
+  modelName = o.name;
+  renderObjectList();
+}
+
+/** Turn a raw {name, positions, triGroup?} into a shelf entry (builds caches). */
+function makeObjectEntry(raw) {
+  const { geometry, origin } = viewer.prepGeometry(raw.positions);
+  const caches = buildMeshCaches(geometry);
+  const triGroup = raw.triGroup && raw.triGroup.length === caches.triCount
+    ? Uint16Array.from(raw.triGroup) : new Uint16Array(caches.triCount);
+  return {
+    id: nextObjId++,
+    name: raw.name || `Object ${nextObjId}`,
+    geometry,
+    triGroup,
+    blocked: new Uint8Array(caches.triCount),
+    adjacency: caches.adjacency,
+    triNormals: caches.triNormals,
+    triCentroids: caches.triCentroids,
+    triCount: caches.triCount,
+    undoStack: [],
+    redoStack: [],
+    origin,
+  };
+}
+
+/** Add raw objects to the project (replacing or appending), activate one. */
+function ingestObjects(rawObjects, { replace }) {
+  if (replace) {
+    for (const o of objects) { o.geometry.disposeBoundsTree?.(); o.geometry.dispose(); }
+    objects = [];
+    activeId = null;
+  }
+  const wasEmpty = objects.length === 0;
+  const entries = rawObjects.map(makeObjectEntry);
+  objects.push(...entries);
+  projection.clear();
+  document.getElementById('btn-proj-import').disabled = true;
+  document.getElementById('btn-proj-return').disabled = true;
+  // activate the first newly-added object; frame only when the project was empty
+  activate(entries[0].id, { frame: wasEmpty });
+}
+
+async function loadFile(file, { append = false } = {}) {
+  setStatus(`${append ? 'Appending' : 'Loading'} ${file.name}…`);
   const buffer = await file.arrayBuffer();
   try {
-    let mesh;
-    let imported = null;
+    let raw;          // [{ name, positions, triGroup? }]
+    let filamentColors = null;
+    const base = file.name.replace(/\.(stl|3mf)$/i, '');
     if (/\.3mf$/i.test(file.name)) {
-      imported = parse3MF(buffer);
-      mesh = viewer.loadPositions(imported.positions);
+      const parsed = parse3MF(buffer);
+      filamentColors = parsed.filamentColors;
+      raw = parsed.objects.map((o, i) => ({
+        name: parsed.objects.length > 1 ? (o.name || `${base} ${i + 1}`) : base,
+        positions: o.positions,
+        triGroup: o.triGroup,
+      }));
     } else {
-      mesh = viewer.loadSTL(buffer);
+      raw = [{ name: base, positions: viewer.parseSTL(buffer) }];
     }
-    modelName = file.name.replace(/\.(stl|3mf)$/i, '');
-    painter.setMesh(mesh);
-    clearLine();
-    projection.clear();
-    document.getElementById('btn-proj-import').disabled = true;
-    document.getElementById('btn-proj-return').disabled = true;
-    // painter.setMesh already rebuilt the mirror map for the new geometry;
-    // reposition the plane helper to the new model
-    viewer.setMirrorPlane(painter.mirrorAxis);
+    if (!append) modelName = base;
 
-    if (imported) {
-      let maxG = 0;
-      for (const g of imported.triGroup) if (g > maxG) maxG = g;
-      while (painter.groups.length <= Math.min(maxG, 15)) painter.addGroup();
-      if (imported.filamentColors) {
-        imported.filamentColors.forEach((c, i) => {
-          if (painter.groups[i]) painter.groups[i].color = c;
-        });
-      }
-      painter.triGroup.set(imported.triGroup);
-      painter.repaintAll();
-      renderGroups();
-      const painted = imported.triGroup.reduce((a, g) => a + (g > 0 ? 1 : 0), 0);
-      setStatus(`${file.name} — ${painter.triCount.toLocaleString()} triangles, ${painted.toLocaleString()} painted across ${maxG + 1} filament slot(s).`);
-    } else {
-      setStatus(`${file.name} — ${painter.triCount.toLocaleString()} triangles. Middle-drag to rotate, right-drag to pan, left-drag to paint.`);
+    // grow the palette to cover imported paint, apply filament colors
+    let maxG = 0;
+    for (const o of raw) for (const g of o.triGroup || []) if (g > maxG) maxG = g;
+    while (painter.groups.length <= Math.min(maxG, 15)) painter.addGroup();
+    if (filamentColors) {
+      filamentColors.forEach((c, i) => { if (painter.groups[i]) painter.groups[i].color = c; });
     }
+
+    ingestObjects(raw, { replace: !append });
+    renderGroups();
+    const painted = raw.reduce((a, o) => a + (o.triGroup ? o.triGroup.reduce((s, g) => s + (g > 0 ? 1 : 0), 0) : 0), 0);
+    setStatus(
+      `${append ? 'Appended' : 'Loaded'} ${file.name} — ${raw.length} object(s), ` +
+      `${objects.length} on the shelf` +
+      (painted ? `, ${painted.toLocaleString()} triangles already painted.` : '.'));
   } catch (err) {
     console.error(err);
     setStatus(`Failed to load ${file.name}: ${err.message}`);
   }
+}
+
+// ---- object shelf UI ----
+
+function renderObjectList() {
+  const el = document.getElementById('object-list');
+  if (!el) return;
+  el.innerHTML = '';
+  for (const o of objects) {
+    const painted = o.triGroup.reduce((s, g) => s + (g > 0 ? 1 : 0), 0);
+    const row = document.createElement('div');
+    row.className = 'object-row' + (o.id === activeId ? ' active' : '');
+
+    const name = document.createElement('span');
+    name.className = 'object-name';
+    name.textContent = o.name;
+    name.title = 'Click to edit this object · double-click to rename';
+    name.addEventListener('dblclick', (e) => {
+      e.stopPropagation();
+      const v = prompt('Object name:', o.name);
+      if (v && v.trim()) { o.name = v.trim(); if (o.id === activeId) modelName = o.name; renderObjectList(); }
+    });
+
+    const meta = document.createElement('span');
+    meta.className = 'object-meta';
+    meta.textContent = painted ? `${painted.toLocaleString()}▲` : '—';
+    meta.title = `${o.triCount.toLocaleString()} triangles, ${painted.toLocaleString()} painted`;
+
+    const dup = mkIconBtn('⧉', 'Duplicate', (e) => { e.stopPropagation(); duplicateObject(o.id); });
+    const del = mkIconBtn('✕', 'Remove object', (e) => { e.stopPropagation(); removeObject(o.id); });
+    del.classList.add('del');
+
+    row.append(name, meta, dup, del);
+    row.addEventListener('click', () => activate(o.id));
+    el.append(row);
+  }
+  const has = objects.length > 0;
+  document.getElementById('btn-split-shells').disabled = !has;
+  document.getElementById('btn-export').disabled = !has;
+}
+
+function mkIconBtn(txt, title, onClick) {
+  const b = document.createElement('button');
+  b.className = 'object-icon';
+  b.textContent = txt;
+  b.title = title;
+  b.addEventListener('click', onClick);
+  return b;
+}
+
+function removeObject(id) {
+  const i = objects.findIndex((o) => o.id === id);
+  if (i < 0) return;
+  const wasActive = id === activeId;
+  if (wasActive) { snapshotActive(); activeId = null; }
+  const [gone] = objects.splice(i, 1);
+  gone.geometry.disposeBoundsTree?.();
+  gone.geometry.dispose();
+  if (!objects.length) {
+    activeId = null;
+    if (viewer.mesh) viewer.mesh.visible = false;
+    viewer.setMirrorPlane(null);
+    setStatus('Shelf empty — open a file to start.');
+  } else if (wasActive) {
+    activate(objects[Math.min(i, objects.length - 1)].id);
+  } else {
+    renderObjectList();
+  }
+}
+
+function duplicateObject(id) {
+  const o = objects.find((o) => o.id === id);
+  if (!o) return;
+  if (id === activeId) snapshotActive();
+  const entry = makeObjectEntry({
+    name: o.name + ' copy',
+    positions: shiftedPositions(o),
+    triGroup: o.triGroup,
+  });
+  entry.blocked = Uint8Array.from(o.blocked);
+  const at = objects.findIndex((x) => x.id === id) + 1;
+  objects.splice(at, 0, entry);
+  renderObjectList();
+  setStatus(`Duplicated "${o.name}".`);
+}
+
+/** Object's positions restored to world coords (display coords + origin). */
+function shiftedPositions(o) {
+  const src = o.geometry.attributes.position.array;
+  const out = new Float32Array(src.length);
+  const { x, y, z } = o.origin || { x: 0, y: 0, z: 0 };
+  for (let i = 0; i < src.length; i += 3) {
+    out[i] = src[i] + x; out[i + 1] = src[i + 1] + y; out[i + 2] = src[i + 2] + z;
+  }
+  return out;
+}
+
+/** Split the active object's disconnected shells into separate objects. */
+function splitActiveByShells() {
+  if (activeId == null) return;
+  snapshotActive();
+  const o = objects.find((o) => o.id === activeId);
+  const { comp, count } = connectedComponents(o.adjacency, o.triCount);
+  if (count <= 1) return setStatus('This object is a single connected shell — nothing to split.');
+  const world = shiftedPositions(o);
+  const parts = [];
+  for (let c = 0; c < count; c++) {
+    const tris = [];
+    for (let t = 0; t < o.triCount; t++) if (comp[t] === c) tris.push(t);
+    const pos = new Float32Array(tris.length * 9);
+    const grp = new Uint16Array(tris.length);
+    tris.forEach((t, i) => { pos.set(world.subarray(t * 9, t * 9 + 9), i * 9); grp[i] = o.triGroup[t]; });
+    parts.push({ name: `${o.name} ${c + 1}`, positions: pos, triGroup: grp });
+  }
+  const at = objects.findIndex((x) => x.id === activeId);
+  const entries = parts.map(makeObjectEntry);
+  objects.splice(at, 1, ...entries); // replace the original with its parts
+  o.geometry.disposeBoundsTree?.();
+  o.geometry.dispose();
+  activeId = null;
+  activate(entries[0].id);
+  setStatus(`Split "${o.name}" into ${count} objects.`);
 }
 
 // ---- tools ----
@@ -1169,31 +1377,43 @@ document.getElementById('btn-add-group').addEventListener('click', () => {
 
 restorePalette();
 renderGroups();
+renderObjectList();
+
+// ---- object shelf actions ----
+
+const appendInput = document.getElementById('append-input');
+document.getElementById('btn-append').addEventListener('click', () => appendInput.click());
+appendInput.addEventListener('change', async () => {
+  const file = appendInput.files[0];
+  appendInput.value = '';
+  if (!file) return;
+  if (!objects.length) return loadFile(file);
+  await loadFile(file, { append: true });
+});
+document.getElementById('btn-split-shells').addEventListener('click', splitActiveByShells);
+
+// debug hook for tests
+window.__mp.objects = () => objects;
+window.__mp.activeId = () => activeId;
 
 // ---- export ----
 
 document.getElementById('btn-export').addEventListener('click', () => {
-  if (!painter.mesh) return setStatus('Nothing to export — open an STL first.');
+  if (!objects.length) return setStatus('Nothing to export — open a file first.');
+  snapshotActive();
   setStatus('Exporting…');
   try {
-    const mode = document.getElementById('export-mode').value;
-    const exporter = mode === 'parts' ? exportMultiPart3MF : exportPainted3MF;
-    const bytes = exporter(
-      painter.mesh.geometry,
-      painter.triGroup,
-      painter.groups,
-      modelName
-    );
+    const bytes = exportProject3MF(objects, painter.groups, modelName);
     const blob = new Blob([bytes], { type: 'model/3mf' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = `${modelName}-painted.3mf`;
     a.click();
     URL.revokeObjectURL(a.href);
-    const used = painter.groupStats().filter((c) => c > 0).length;
-    setStatus(mode === 'parts'
-      ? `Exported ${modelName}-painted.3mf with ${used} part(s). Import it in Orca/Bambu Studio.`
-      : `Exported ${modelName}-painted.3mf as one solid with paint data (${used} color(s)). Import it in Orca/Bambu Studio.`);
+    const totalPainted = objects.reduce(
+      (s, o) => s + o.triGroup.reduce((a, g) => a + (g > 0 ? 1 : 0), 0), 0);
+    setStatus(`Exported ${modelName}-painted.3mf — ${objects.length} object(s), ` +
+      `${totalPainted.toLocaleString()} painted triangles. Import it in Orca/Bambu Studio.`);
   } catch (err) {
     console.error(err);
     setStatus(`Export failed: ${err.message}`);
