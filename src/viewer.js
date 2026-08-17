@@ -210,29 +210,8 @@ export class Viewer {
     this.controls.update();
   }
 
-  /** Build the scene mesh from a cleaned, non-indexed triangle soup. */
-  loadPositions(positions) {
-    if (this.mesh) {
-      this.scene.remove(this.mesh);
-      this.mesh.geometry.disposeBoundsTree();
-      this.mesh.geometry.dispose();
-      this.mesh.material.dispose();
-      this.mesh = null;
-    }
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    return this._setupMesh(geometry);
-  }
-
-  loadSTL(arrayBuffer) {
-    if (this.mesh) {
-      this.scene.remove(this.mesh);
-      this.mesh.geometry.disposeBoundsTree();
-      this.mesh.geometry.dispose();
-      this.mesh.material.dispose();
-      this.mesh = null;
-    }
-
+  /** Parse an STL to a cleaned non-indexed position array (no scene changes). */
+  parseSTL(arrayBuffer) {
     let geometry = new STLLoader().parse(arrayBuffer);
     geometry = geometry.toNonIndexed ? (geometry.index ? geometry.toNonIndexed() : geometry) : geometry;
 
@@ -240,68 +219,61 @@ export class Viewer {
     // corners). Many STLs contain them (Benchy has 552); slicers silently
     // remove them on STL import, but written into an indexed 3MF they become
     // non-manifold edges.
-    {
-      const src = geometry.attributes.position.array;
-      const triCount = src.length / 9;
-      const eq = (i, j) => src[i] === src[j] && src[i + 1] === src[j + 1] && src[i + 2] === src[j + 2];
-      let kept = 0;
-      const keep = new Uint8Array(triCount);
-      for (let t = 0; t < triCount; t++) {
-        const o = t * 9;
-        if (!(eq(o, o + 3) || eq(o + 3, o + 6) || eq(o, o + 6))) {
-          keep[t] = 1;
-          kept++;
-        }
-      }
-      if (kept < triCount) {
-        const clean = new Float32Array(kept * 9);
-        let w = 0;
-        for (let t = 0; t < triCount; t++) {
-          if (keep[t]) {
-            clean.set(src.subarray(t * 9, t * 9 + 9), w);
-            w += 9;
-          }
-        }
-        geometry.setAttribute('position', new THREE.BufferAttribute(clean, 3));
-        console.info(`Dropped ${triCount - kept} degenerate triangle(s) from the STL.`);
-      }
+    const src = geometry.attributes.position.array;
+    const triCount = src.length / 9;
+    const eq = (i, j) => src[i] === src[j] && src[i + 1] === src[j + 1] && src[i + 2] === src[j + 2];
+    const keep = [];
+    for (let t = 0; t < triCount; t++) {
+      const o = t * 9;
+      if (!(eq(o, o + 3) || eq(o + 3, o + 6) || eq(o, o + 6))) keep.push(t);
     }
-    return this._setupMesh(geometry);
+    if (keep.length === triCount) return src instanceof Float32Array ? src : Float32Array.from(src);
+    const clean = new Float32Array(keep.length * 9);
+    keep.forEach((t, i) => clean.set(src.subarray(t * 9, t * 9 + 9), i * 9));
+    console.info(`Dropped ${triCount - keep.length} degenerate triangle(s) from the STL.`);
+    return clean;
   }
 
-  /** Shared mesh setup: normals, centering, colors, BVH, material, framing. */
-  _setupMesh(geometry) {
+  /**
+   * Prepare a display geometry from a triangle soup: normals, center on the
+   * plate (recording the offset so export can restore world coords), per-vertex
+   * color attribute, and BVH. Does not touch the scene. Returns { geometry,
+   * origin } where origin is the translation subtracted (add it back to recover
+   * the object's original position).
+   */
+  prepGeometry(positions) {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     geometry.computeVertexNormals();
-
-    // center on the plate, rest on Z=0
     geometry.computeBoundingBox();
     const bb = geometry.boundingBox;
-    const cx = (bb.min.x + bb.max.x) / 2;
-    const cy = (bb.min.y + bb.max.y) / 2;
-    geometry.translate(-cx, -cy, -bb.min.z);
+    const origin = { x: (bb.min.x + bb.max.x) / 2, y: (bb.min.y + bb.max.y) / 2, z: bb.min.z };
+    geometry.translate(-origin.x, -origin.y, -origin.z);
     geometry.computeBoundingBox();
-
-    // per-vertex colors, driven by the painter
     const count = geometry.attributes.position.count;
     geometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array(count * 3), 3));
-
     geometry.computeBoundsTree();
+    return { geometry, origin };
+  }
 
-    const material = new THREE.MeshStandardMaterial({
-      vertexColors: true,
-      roughness: 0.55,
-      metalness: 0.0,
-    });
-    this.mesh = new THREE.Mesh(geometry, material);
-    this.scene.add(this.mesh);
-
-    // frame the model
-    const size = new THREE.Vector3();
-    geometry.boundingBox.getSize(size);
-    const d = Math.max(size.x, size.y, size.z) * 1.8;
-    this.controls.target.set(0, 0, size.z / 2);
-    this.camera.position.set(d, -d, d * 0.8);
-
+  /** Make `geometry` the active scene mesh (shelved geometries are kept, not
+   *  disposed). Frames the camera only when `frame` is true. */
+  installGeometry(geometry, frame = false) {
+    if (!this.mesh) {
+      const material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.55, metalness: 0.0 });
+      this.mesh = new THREE.Mesh(geometry, material);
+      this.scene.add(this.mesh);
+    } else {
+      this.mesh.geometry = geometry;
+    }
+    this.mesh.visible = true;
+    if (frame) {
+      const size = new THREE.Vector3();
+      geometry.boundingBox.getSize(size);
+      const d = Math.max(size.x, size.y, size.z) * 1.8;
+      this.controls.target.set(0, 0, size.z / 2);
+      this.camera.position.set(d, -d, d * 0.8);
+    }
     return this.mesh;
   }
 
