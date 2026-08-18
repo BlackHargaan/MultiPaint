@@ -1,6 +1,7 @@
 import './style.css';
 import { Viewer } from './viewer.js';
-import { Painter, buildMeshCaches, connectedComponents } from './painter.js';
+import { Painter, connectedComponents } from './painter.js';
+import { buildMeshCachesAsync } from './meshcache.js';
 import { exportProject3MF } from './export3mf.js';
 import { ProjectionSession, setDeshade } from './projection.js';
 import { removeBackground } from './imagebg.js';
@@ -196,11 +197,11 @@ function refreshGhosts() {
  * With center:false (restore from a saved project) the positions are already
  * centered, so the saved origin/blocked are used as-is.
  */
-function makeObjectEntry(raw, { center = true } = {}) {
+async function makeObjectEntry(raw, { center = true } = {}) {
   const prepped = viewer.prepGeometry(raw.positions, { center });
   const origin = center ? prepped.origin : (raw.origin || { x: 0, y: 0, z: 0 });
   const geometry = prepped.geometry;
-  const caches = buildMeshCaches(geometry);
+  const caches = await buildMeshCachesAsync(geometry.attributes.position.array);
   const triGroup = raw.triGroup && raw.triGroup.length === caches.triCount
     ? Uint16Array.from(raw.triGroup) : new Uint16Array(caches.triCount);
   const blocked = raw.blocked && raw.blocked.length === caches.triCount
@@ -222,14 +223,14 @@ function makeObjectEntry(raw, { center = true } = {}) {
 }
 
 /** Add raw objects to the project (replacing or appending), activate one. */
-function ingestObjects(rawObjects, { replace }) {
+async function ingestObjects(rawObjects, { replace }) {
   if (replace) {
     for (const o of objects) { o.geometry.disposeBoundsTree?.(); o.geometry.dispose(); }
     objects = [];
     activeId = null;
   }
   const wasEmpty = objects.length === 0;
-  const entries = rawObjects.map(makeObjectEntry);
+  const entries = await Promise.all(rawObjects.map((r) => makeObjectEntry(r)));
   const hadObjects = objects.length > 0;
   objects.push(...entries);
   // auto-layout: appended objects are placed in free space beside the existing
@@ -270,7 +271,7 @@ async function loadFile(file, { append = false } = {}) {
       filamentColors.forEach((c, i) => { if (painter.groups[i]) painter.groups[i].color = c; });
     }
 
-    ingestObjects(raw, { replace: !append });
+    await ingestObjects(raw, { replace: !append });
     renderGroups();
     const painted = raw.reduce((a, o) => a + (o.triGroup ? o.triGroup.reduce((s, g) => s + (g > 0 ? 1 : 0), 0) : 0), 0);
     setStatus(
@@ -357,16 +358,16 @@ function removeObject(id) {
   }
 }
 
-function duplicateObject(id) {
+async function duplicateObject(id) {
   const o = objects.find((o) => o.id === id);
   if (!o) return;
   if (id === activeId) snapshotActive();
-  const entry = makeObjectEntry({
+  const entry = await makeObjectEntry({
     name: o.name + ' copy',
     positions: shiftedPositions(o),
     triGroup: o.triGroup,
+    blocked: o.blocked,
   });
-  entry.blocked = Uint8Array.from(o.blocked);
   const at = objects.findIndex((x) => x.id === id) + 1;
   objects.splice(at, 0, entry);
   renderObjectList();
@@ -386,7 +387,7 @@ function shiftedPositions(o) {
 }
 
 /** Split the active object's disconnected shells into separate objects. */
-function splitActiveByShells() {
+async function splitActiveByShells() {
   if (activeId == null) return;
   snapshotActive();
   const o = objects.find((o) => o.id === activeId);
@@ -403,7 +404,7 @@ function splitActiveByShells() {
     parts.push({ name: `${o.name} ${c + 1}`, positions: pos, triGroup: grp });
   }
   const at = objects.findIndex((x) => x.id === activeId);
-  const entries = parts.map(makeObjectEntry);
+  const entries = await Promise.all(parts.map((p) => makeObjectEntry(p)));
   objects.splice(at, 1, ...entries); // replace the original with its parts
   o.geometry.disposeBoundsTree?.();
   o.geometry.dispose();
@@ -433,7 +434,7 @@ function collectProject() {
 }
 
 /** Rebuild the whole project from a saved structure. */
-function restoreProject(data) {
+async function restoreProject(data) {
   if (!data || !data.objects || !data.objects.length) return false;
   for (const o of objects) { o.geometry.disposeBoundsTree?.(); o.geometry.dispose(); }
   objects = [];
@@ -445,7 +446,7 @@ function restoreProject(data) {
     }));
     painter.activeGroup = Math.min(painter.activeGroup, painter.groups.length - 1);
   }
-  const entries = data.objects.map((raw) => makeObjectEntry(raw, { center: false }));
+  const entries = await Promise.all(data.objects.map((raw) => makeObjectEntry(raw, { center: false })));
   objects.push(...entries);
   renderGroups();
   const active = entries[Math.min(data.activeIndex || 0, entries.length - 1)];
@@ -1600,7 +1601,7 @@ projectInput.addEventListener('change', async () => {
   try {
     const data = unpackProjectFile(await file.arrayBuffer());
     modelName = file.name.replace(/\.mpaint$/i, '');
-    if (restoreProject(data)) {
+    if (await restoreProject(data)) {
       setStatus(`Opened project ${file.name} — ${objects.length} object(s).`);
       saveNow();
     } else {
@@ -1616,7 +1617,7 @@ projectInput.addEventListener('change', async () => {
 (async () => {
   try {
     const saved = await idbLoadProject();
-    if (saved && restoreProject(saved)) {
+    if (saved && await restoreProject(saved)) {
       setStatus(`Resumed your last project — ${objects.length} object(s). Open a file to start over.`);
     }
   } catch (e) { console.warn('Autosave restore failed', e); }

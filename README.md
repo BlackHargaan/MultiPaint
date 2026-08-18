@@ -247,6 +247,10 @@ land where they belong on the plate. Unpainted (Base) faces print on slot 1.
 - `src/viewer.js` — Three.js scene, STL parsing, geometry prep, BVH picking
 - `src/painter.js` — per-triangle group model, adjacency, paint tools, undo,
   mirror, mesh-cache/connected-component helpers for the shelf
+- `src/meshcore.js` — pure per-triangle caches (adjacency, normals, centroids)
+- `src/meshcache.js` + `src/meshcache.worker.js` — build those caches in a Web
+  Worker for big meshes (import and post-subdivision rebuild) so the UI doesn't
+  freeze; synchronous fallback for small meshes / non-worker environments
 - `src/import3mf.js` — multi-object 3MF reader (paint + settings)
 - `src/export3mf.js` — multi-object painted 3MF writer (no Three.js dependency)
 - `src/projectio.js` — project persistence (IndexedDB autosave + `.mpaint` files)
