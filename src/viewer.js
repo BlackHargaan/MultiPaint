@@ -64,6 +64,14 @@ export class Viewer {
     this.lineGroup.renderOrder = 998;
     this.scene.add(this.lineGroup);
 
+    // ghost meshes for shelved objects (onion-skin context)
+    this.ghostGroup = new THREE.Group();
+    this.scene.add(this.ghostGroup);
+    this.ghostMaterial = new THREE.MeshStandardMaterial({
+      color: 0x8792a0, roughness: 0.9, metalness: 0.0,
+      transparent: true, opacity: 0.22, depthWrite: false,
+    });
+
     // symmetry (mirror) plane helper
     this.mirrorPlane = new THREE.Mesh(
       new THREE.PlaneGeometry(1, 1),
@@ -338,6 +346,21 @@ export class Viewer {
     for (const child of [...this.lineGroup.children]) {
       this.lineGroup.remove(child);
       child.geometry.dispose();
+    }
+  }
+
+  /**
+   * Render shelved objects as translucent ghosts for plate context. `list` is
+   * [{ geometry, position:{x,y,z} }]; geometries are shared with the shelf and
+   * never disposed here. Only the active mesh is picked, so ghosts stay inert.
+   */
+  setGhosts(list) {
+    for (const m of [...this.ghostGroup.children]) this.ghostGroup.remove(m);
+    for (const g of list) {
+      const mesh = new THREE.Mesh(g.geometry, this.ghostMaterial);
+      mesh.position.set(g.position.x, g.position.y, g.position.z);
+      mesh.renderOrder = 1;
+      this.ghostGroup.add(mesh);
     }
   }
 

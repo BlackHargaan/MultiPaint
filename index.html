@@ -83,7 +83,13 @@
         <aside id="sidebar">
           <h3>Objects</h3>
           <div id="object-list"></div>
-          <button id="btn-split-shells" disabled title="Split the active object's disconnected shells into separate objects">Split into parts</button>
+          <label class="proj-opt" title="Show the other objects as translucent context at their plate positions (relative to the object you're editing)">
+            <input type="checkbox" id="ghost-others" checked /> Ghost other objects
+          </label>
+          <div id="object-actions">
+            <button id="btn-split-shells" disabled title="Split the active object's disconnected shells into separate objects">Split into parts</button>
+            <button id="btn-arrange" disabled title="Re-pack all objects into a tidy, non-overlapping grid on the plate">Auto-arrange</button>
+          </div>
           <p class="hint">Each object is painted independently and shelved as you
           switch. Click one to edit it; use <b>+ Append</b> (top bar) to add more
           files. <b>Export 3MF</b> writes them all as one multi-object file.</p>
