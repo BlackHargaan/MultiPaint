@@ -36,6 +36,7 @@ let objects = [];      // [{ id, name, geometry, triGroup, blocked, adjacency,
                        //    redoStack, origin }]
 let activeId = null;
 let nextObjId = 1;
+let ghostOn = true;    // show shelved objects as translucent context
 
 // active pointer interaction: null | 'brush' | 'blocker' | 'scrub'
 let dragMode = null;
@@ -107,6 +108,21 @@ function activate(id, { frame = false } = {}) {
   clearLine();
   modelName = o.name;
   renderObjectList();
+  refreshGhosts();
+}
+
+/** Show every shelved object as a ghost, positioned relative to the active
+ *  object's origin so the active stays centered and the plate layout holds. */
+function refreshGhosts() {
+  const active = objects.find((o) => o.id === activeId);
+  if (!active || !ghostOn || objects.length < 2) { viewer.setGhosts([]); return; }
+  const a = active.origin || { x: 0, y: 0, z: 0 };
+  viewer.setGhosts(objects
+    .filter((o) => o.id !== activeId)
+    .map((o) => {
+      const g = o.origin || { x: 0, y: 0, z: 0 };
+      return { geometry: o.geometry, position: { x: g.x - a.x, y: g.y - a.y, z: g.z - a.z } };
+    }));
 }
 
 /** Turn a raw {name, positions, triGroup?} into a shelf entry (builds caches). */
@@ -249,11 +265,13 @@ function removeObject(id) {
     activeId = null;
     if (viewer.mesh) viewer.mesh.visible = false;
     viewer.setMirrorPlane(null);
+    viewer.setGhosts([]);
     setStatus('Shelf empty — open a file to start.');
   } else if (wasActive) {
     activate(objects[Math.min(i, objects.length - 1)].id);
   } else {
     renderObjectList();
+    refreshGhosts();
   }
 }
 
@@ -270,6 +288,7 @@ function duplicateObject(id) {
   const at = objects.findIndex((x) => x.id === id) + 1;
   objects.splice(at, 0, entry);
   renderObjectList();
+  refreshGhosts();
   setStatus(`Duplicated "${o.name}".`);
 }
 
@@ -1391,6 +1410,10 @@ appendInput.addEventListener('change', async () => {
   await loadFile(file, { append: true });
 });
 document.getElementById('btn-split-shells').addEventListener('click', splitActiveByShells);
+document.getElementById('ghost-others').addEventListener('change', (e) => {
+  ghostOn = e.target.checked;
+  refreshGhosts();
+});
 
 // debug hook for tests
 window.__mp.objects = () => objects;
