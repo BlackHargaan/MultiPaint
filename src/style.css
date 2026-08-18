@@ -182,7 +182,8 @@ main {
 .object-icon { background: none; border: none; color: #777; padding: 2px 5px; font-size: 12px; }
 .object-icon:hover { color: #cfd3d9; }
 .object-icon.del:hover { color: #ff7b7b; }
-#btn-split-shells { width: 100%; }
+#object-actions { display: flex; gap: 6px; }
+#object-actions button { flex: 1; width: auto; }
 #btn-append { }
 
 #sidebar h3:not(:first-child) { margin-top: 18px; }

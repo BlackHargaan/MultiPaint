@@ -111,6 +111,70 @@ function activate(id, { frame = false } = {}) {
   refreshGhosts();
 }
 
+/** XY footprint (mm) of an object's centered geometry. */
+function footprint(o) {
+  o.geometry.computeBoundingBox();
+  const bb = o.geometry.boundingBox;
+  return { w: bb.max.x - bb.min.x, h: bb.max.y - bb.min.y };
+}
+
+const LAYOUT_MARGIN = 8; // mm gap between objects
+
+/**
+ * Shelf-pack a list of objects into rows and assign each a plate origin
+ * (geometry is centered, so origin = footprint center). Returns the packed
+ * layout's overall width/height and per-object cell so callers can position or
+ * center it.
+ */
+function packRows(list, maxRowW) {
+  const placed = [];
+  let x = 0, y = 0, rowH = 0;
+  for (const o of list) {
+    const f = footprint(o);
+    if (x > 0 && x + f.w > maxRowW) { x = 0; y += rowH + LAYOUT_MARGIN; rowH = 0; }
+    placed.push({ o, x, y, f });
+    x += f.w + LAYOUT_MARGIN;
+    rowH = Math.max(rowH, f.h);
+  }
+  const width = Math.max(0, ...placed.map((p) => p.x + p.f.w));
+  const height = y + rowH;
+  return { placed, width, height };
+}
+
+/** Re-pack every object into a tidy centered grid on the plate. */
+function arrangeAll() {
+  if (!objects.length) return;
+  const widths = objects.map((o) => footprint(o).w);
+  const cols = Math.max(1, Math.round(Math.sqrt(objects.length)));
+  const maxRowW = Math.max(Math.max(...widths),
+    (widths.reduce((s, w) => s + w + LAYOUT_MARGIN, 0)) / cols);
+  const { placed, width, height } = packRows(objects, maxRowW);
+  for (const p of placed) {
+    p.o.origin = { x: p.x + p.f.w / 2 - width / 2, y: p.y + p.f.h / 2 - height / 2, z: 0 };
+  }
+  refreshGhosts();
+  setStatus(`Auto-arranged ${objects.length} object(s) on the plate.`);
+}
+
+/** Place newly-appended objects in a row to the right of the existing ones,
+ *  so they don't overlap what's already placed. */
+function placeAppended(newEntries) {
+  const existing = objects.filter((o) => !newEntries.includes(o));
+  if (!existing.length) return; // nothing to sit beside — keep own origins
+  let maxX = -Infinity, minY = Infinity;
+  for (const o of existing) {
+    const f = footprint(o);
+    maxX = Math.max(maxX, (o.origin?.x ?? 0) + f.w / 2);
+    minY = Math.min(minY, (o.origin?.y ?? 0) - f.h / 2);
+  }
+  let x = maxX + LAYOUT_MARGIN;
+  for (const o of newEntries) {
+    const f = footprint(o);
+    o.origin = { x: x + f.w / 2, y: minY + f.h / 2, z: 0 };
+    x += f.w + LAYOUT_MARGIN;
+  }
+}
+
 /** Show every shelved object as a ghost, positioned relative to the active
  *  object's origin so the active stays centered and the plate layout holds. */
 function refreshGhosts() {
@@ -156,7 +220,11 @@ function ingestObjects(rawObjects, { replace }) {
   }
   const wasEmpty = objects.length === 0;
   const entries = rawObjects.map(makeObjectEntry);
+  const hadObjects = objects.length > 0;
   objects.push(...entries);
+  // auto-layout: appended objects are placed in free space beside the existing
+  // ones so nothing overlaps on the plate (a fresh import keeps its own layout)
+  if (hadObjects) placeAppended(entries);
   projection.clear();
   document.getElementById('btn-proj-import').disabled = true;
   document.getElementById('btn-proj-return').disabled = true;
@@ -241,6 +309,7 @@ function renderObjectList() {
   }
   const has = objects.length > 0;
   document.getElementById('btn-split-shells').disabled = !has;
+  document.getElementById('btn-arrange').disabled = objects.length < 2;
   document.getElementById('btn-export').disabled = !has;
 }
 
@@ -1410,6 +1479,7 @@ appendInput.addEventListener('change', async () => {
   await loadFile(file, { append: true });
 });
 document.getElementById('btn-split-shells').addEventListener('click', splitActiveByShells);
+document.getElementById('btn-arrange').addEventListener('click', arrangeAll);
 document.getElementById('ghost-others').addEventListener('change', (e) => {
   ghostOn = e.target.checked;
   refreshGhosts();

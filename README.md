@@ -197,7 +197,11 @@ separate instead of merging them into one blob:
 
 - **Multi-object 3MF** imports as one shelf entry per build item.
 - **+ Append** (top bar) adds another file's objects to the current shelf, so
-  you can assemble a plate from several STL/3MF files.
+  you can assemble a plate from several STL/3MF files. Appended objects are
+  auto-placed in free space beside the existing ones so nothing overlaps;
+  **Auto-arrange** (Objects panel) re-packs everything into a tidy centered
+  grid. The layout is written into the exported 3MF, so the slicer opens the
+  plate already arranged.
 - **Split into parts** (Objects panel) breaks the active object's disconnected
   shells into separate objects via the adjacency graph — e.g. a print that's
   actually several loose pieces.
