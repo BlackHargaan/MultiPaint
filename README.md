@@ -218,6 +218,20 @@ so zoom out once and the layout stays in view as you work. Paint each object, th
 at its original position — so the slicer opens the whole plate ready to go, no
 Blender/slicer round-trip to split and re-paint.
 
+## Saving your work
+
+Two ways your work persists, separate from the slicer export:
+
+- **Autosave / resume** — the whole project (every object's geometry, paint and
+  blockers, the filament palette, and which object is active) is autosaved to
+  the browser's IndexedDB as you work, and restored automatically the next time
+  you open the app. Close the tab and come back — it's still there. Opening a
+  new model (**Open**) starts over.
+- **Save / Open project** — **Save project** writes a portable `.mpaint` file (a
+  zip of the geometry and paint buffers) you can keep as a named snapshot or
+  move to another machine; **Open project** restores it exactly, blockers and
+  layout included. (This is a work file — use **Export 3MF** for the slicer.)
+
 ## How the export works
 
 The shelf is exported as one 3MF with **each object as its own build item**,
@@ -235,4 +249,5 @@ land where they belong on the plate. Unpainted (Base) faces print on slot 1.
   mirror, mesh-cache/connected-component helpers for the shelf
 - `src/import3mf.js` — multi-object 3MF reader (paint + settings)
 - `src/export3mf.js` — multi-object painted 3MF writer (no Three.js dependency)
+- `src/projectio.js` — project persistence (IndexedDB autosave + `.mpaint` files)
 - `src/main.js` — UI wiring and the object shelf (activate/snapshot/split)

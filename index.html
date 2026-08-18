@@ -13,6 +13,8 @@
         <input type="file" id="file-input" accept=".stl,.3mf" hidden />
         <button id="btn-append" title="Add another file's objects to the current shelf">+ Append</button>
         <input type="file" id="append-input" accept=".stl,.3mf" hidden />
+        <button id="btn-open-project" title="Open a saved .mpaint project (restores all objects, paint and palette)">Open project</button>
+        <input type="file" id="project-input" accept=".mpaint" hidden />
         <div id="tools">
           <button class="tool" data-tool="brush" title="Paint triangles under a round brush (B)">Brush</button>
           <button class="tool" data-tool="fill" title="Flood fill across smooth surfaces, stops at sharp edges (F)">Smart Fill</button>
@@ -61,6 +63,7 @@
           <span id="fill-angle-val">30°</span>
         </label>
         <span id="spacer"></span>
+        <button id="btn-save-project" disabled title="Save the whole project (objects, paint, palette) as a .mpaint file to reopen later">Save project</button>
         <button id="btn-export" title="Export every object on the shelf as one painted 3MF for Orca/Bambu">Export 3MF</button>
       </header>
       <main>
