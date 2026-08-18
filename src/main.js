@@ -6,6 +6,7 @@ import { ProjectionSession, setDeshade } from './projection.js';
 import { removeBackground } from './imagebg.js';
 import { parse3MF } from './import3mf.js';
 import { rasterizeGlyphs, buildPlacements, buildTextClassifier, buildLevelBaseline, glyphsTotalMm } from './curvedtext.js';
+import { idbSaveProject, idbLoadProject, idbClearProject, packProjectFile, unpackProjectFile } from './projectio.js';
 
 const viewer = new Viewer(document.getElementById('viewport'));
 const painter = new Painter();
@@ -189,18 +190,27 @@ function refreshGhosts() {
     }));
 }
 
-/** Turn a raw {name, positions, triGroup?} into a shelf entry (builds caches). */
-function makeObjectEntry(raw) {
-  const { geometry, origin } = viewer.prepGeometry(raw.positions);
+/**
+ * Turn a raw object into a shelf entry (builds caches). With center:true
+ * (import/split/duplicate) the positions are raw coords, centered on the plate.
+ * With center:false (restore from a saved project) the positions are already
+ * centered, so the saved origin/blocked are used as-is.
+ */
+function makeObjectEntry(raw, { center = true } = {}) {
+  const prepped = viewer.prepGeometry(raw.positions, { center });
+  const origin = center ? prepped.origin : (raw.origin || { x: 0, y: 0, z: 0 });
+  const geometry = prepped.geometry;
   const caches = buildMeshCaches(geometry);
   const triGroup = raw.triGroup && raw.triGroup.length === caches.triCount
     ? Uint16Array.from(raw.triGroup) : new Uint16Array(caches.triCount);
+  const blocked = raw.blocked && raw.blocked.length === caches.triCount
+    ? Uint8Array.from(raw.blocked) : new Uint8Array(caches.triCount);
   return {
     id: nextObjId++,
     name: raw.name || `Object ${nextObjId}`,
     geometry,
     triGroup,
-    blocked: new Uint8Array(caches.triCount),
+    blocked,
     adjacency: caches.adjacency,
     triNormals: caches.triNormals,
     triCentroids: caches.triCentroids,
@@ -311,6 +321,9 @@ function renderObjectList() {
   document.getElementById('btn-split-shells').disabled = !has;
   document.getElementById('btn-arrange').disabled = objects.length < 2;
   document.getElementById('btn-export').disabled = !has;
+  const sp = document.getElementById('btn-save-project');
+  if (sp) sp.disabled = !has;
+  markDirty();
 }
 
 function mkIconBtn(txt, title, onClick) {
@@ -398,6 +411,66 @@ function splitActiveByShells() {
   activate(entries[0].id);
   setStatus(`Split "${o.name}" into ${count} objects.`);
 }
+
+// ---- project save / resume ----
+
+/** Snapshot the whole project to a plain structure of typed arrays. */
+function collectProject() {
+  snapshotActive();
+  return {
+    version: 1,
+    groups: painter.groups.map((g) => ({ name: g.name, color: g.color })),
+    activeIndex: Math.max(0, objects.findIndex((o) => o.id === activeId)),
+    objects: objects.map((o) => ({
+      name: o.name,
+      origin: o.origin,
+      triCount: o.triCount,
+      positions: o.geometry.attributes.position.array, // centered display coords
+      triGroup: o.triGroup,
+      blocked: o.blocked,
+    })),
+  };
+}
+
+/** Rebuild the whole project from a saved structure. */
+function restoreProject(data) {
+  if (!data || !data.objects || !data.objects.length) return false;
+  for (const o of objects) { o.geometry.disposeBoundsTree?.(); o.geometry.dispose(); }
+  objects = [];
+  activeId = null;
+  if (Array.isArray(data.groups) && data.groups.length) {
+    painter.groups = data.groups.map((g) => ({
+      name: String(g.name || 'Color'),
+      color: /^#[0-9a-f]{6}$/i.test(g.color) ? g.color : '#d9d9d9',
+    }));
+    painter.activeGroup = Math.min(painter.activeGroup, painter.groups.length - 1);
+  }
+  const entries = data.objects.map((raw) => makeObjectEntry(raw, { center: false }));
+  objects.push(...entries);
+  renderGroups();
+  const active = entries[Math.min(data.activeIndex || 0, entries.length - 1)];
+  activate(active.id, { frame: true });
+  return true;
+}
+
+// debounced autosave to IndexedDB on any change
+let autosaveTimer = null;
+let autosaveBusy = false;
+function markDirty() {
+  if (!objects.length) return;
+  clearTimeout(autosaveTimer);
+  autosaveTimer = setTimeout(saveNow, 1500);
+}
+async function saveNow() {
+  if (autosaveBusy || !objects.length) return;
+  autosaveBusy = true;
+  try { await idbSaveProject(collectProject()); }
+  catch (e) { console.warn('Autosave failed', e); }
+  finally { autosaveBusy = false; }
+}
+// flush on tab hide / close, when a debounced save might still be pending
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') saveNow(); });
+window.addEventListener('pagehide', saveNow);
 
 // ---- tools ----
 
@@ -583,6 +656,7 @@ async function commitLine(asBlocker) {
       : `Painted ${n} triangles along the line with "${painter.groups[painter.activeGroup].name}".`) + tip);
   }
   clearLine();
+  markDirty();
 }
 
 document.getElementById('line-surface').addEventListener('change', () => {
@@ -976,6 +1050,7 @@ document.getElementById('btn-text-apply').addEventListener('click', async () => 
           ? ` — mesh now ${painter.triCount.toLocaleString()} triangles (undo history cleared).`
           : ' (Ctrl+Z to undo).'));
     }
+    markDirty();
     endTextPlacement();
   } catch (err) {
     console.error(err);
@@ -1049,6 +1124,7 @@ document.getElementById('btn-decal-apply').addEventListener('click', async () =>
     if (!subdivide) painter.beginStroke();
     const c = await projection.applyDecal(painter, viewer, decal.img, ov, opts);
     if (!subdivide) painter.endStroke();
+    markDirty();
     if (c.created > 0) renderGroups();
     setStatus(
       `Decal applied: ${c.applied} triangles painted · ${c.transparent} transparent · ` +
@@ -1127,6 +1203,7 @@ document.getElementById('proj-file').addEventListener('change', async () => {
       onProgress: (f) => setStatus(`Projecting image — ${Math.round(f * 100)}%…`),
     });
     painter.endStroke();
+    markDirty();
     if (!c) return setStatus('Projection failed — no snapshot pose stored.');
     if (c.created > 0) renderGroups();
     setStatus(`Projected: ${c.applied} triangles painted · ${c.unchanged} unchanged · ${c.noMatch} no color match · ${c.hidden} facing away/hidden.` +
@@ -1145,6 +1222,7 @@ function doGrow() {
   painter.beginStroke();
   const n = painter.grow();
   painter.endStroke();
+  markDirty();
   setStatus(`Grew "${painter.groups[painter.activeGroup].name}" by ${n} triangles.`);
 }
 function doShrink() {
@@ -1152,6 +1230,7 @@ function doShrink() {
   painter.beginStroke();
   const n = painter.shrink();
   painter.endStroke();
+  markDirty();
   setStatus(`Shrank "${painter.groups[painter.activeGroup].name}" by ${n} triangles.`);
 }
 document.getElementById('btn-grow').addEventListener('click', doGrow);
@@ -1163,6 +1242,7 @@ document.getElementById('btn-despeckle').addEventListener('click', () => {
   painter.beginStroke();
   const { islands, tris } = painter.despeckle(minSize);
   painter.endStroke();
+  markDirty();
   setStatus(islands
     ? `Despeckle: absorbed ${islands} leftover island(s), ${tris} triangles (smaller than ${minSize}).`
     : `Despeckle: no islands smaller than ${minSize} triangles found.`);
@@ -1170,6 +1250,7 @@ document.getElementById('btn-despeckle').addEventListener('click', () => {
 document.getElementById('btn-clear-blockers').addEventListener('click', () => {
   if (!painter.mesh) return;
   painter.clearBlockers();
+  markDirty();
   setStatus('Cleared all blockers.');
 });
 
@@ -1248,6 +1329,7 @@ window.addEventListener('keydown', (e) => {
       removeLastLinePoint();
       setStatus(`Removed last point — ${linePoints.length} left${lineRedo.length ? ' (Ctrl+Y to restore)' : ''}.`);
     } else if (painter.undo()) {
+      markDirty();
       setStatus('Undid stroke.');
     }
     e.preventDefault();
@@ -1257,6 +1339,7 @@ window.addEventListener('keydown', (e) => {
       restoreLinePoint();
       setStatus(`Restored point — ${linePoints.length} placed.`);
     } else if (painter.redo()) {
+      markDirty();
       setStatus('Redid stroke.');
     }
     e.preventDefault();
@@ -1351,6 +1434,7 @@ window.addEventListener('pointerup', async () => {
   if (!dragMode) return;
   const mode = dragMode;
   dragMode = null;
+  markDirty(); // a paint/blocker/scrub stroke just completed
   if (mode === 'scrub') {
     painter.endScrubFill();
     painter.endStroke();
@@ -1421,6 +1505,7 @@ function renderGroups() {
       g.color = color.value;
       painter.refreshGroupColor(i);
       savePalette();
+      markDirty();
     });
 
     const name = document.createElement('input');
@@ -1455,6 +1540,7 @@ function renderGroups() {
     groupsEl.append(row);
   });
   savePalette();
+  markDirty();
 }
 
 document.getElementById('btn-add-group').addEventListener('click', () => {
@@ -1485,9 +1571,61 @@ document.getElementById('ghost-others').addEventListener('change', (e) => {
   refreshGhosts();
 });
 
+// ---- project files (Save / Open .mpaint) ----
+
+document.getElementById('btn-save-project').addEventListener('click', () => {
+  if (!objects.length) return setStatus('Nothing to save — open a file first.');
+  try {
+    const bytes = packProjectFile(collectProject());
+    const blob = new Blob([bytes], { type: 'application/octet-stream' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `${modelName}.mpaint`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    setStatus(`Saved project ${modelName}.mpaint (${objects.length} object(s)). Reopen it any time with Open project.`);
+  } catch (err) {
+    console.error(err);
+    setStatus(`Save failed: ${err.message}`);
+  }
+});
+
+const projectInput = document.getElementById('project-input');
+document.getElementById('btn-open-project').addEventListener('click', () => projectInput.click());
+projectInput.addEventListener('change', async () => {
+  const file = projectInput.files[0];
+  projectInput.value = '';
+  if (!file) return;
+  setStatus(`Opening project ${file.name}…`);
+  try {
+    const data = unpackProjectFile(await file.arrayBuffer());
+    modelName = file.name.replace(/\.mpaint$/i, '');
+    if (restoreProject(data)) {
+      setStatus(`Opened project ${file.name} — ${objects.length} object(s).`);
+      saveNow();
+    } else {
+      setStatus('That project file has no objects.');
+    }
+  } catch (err) {
+    console.error(err);
+    setStatus(`Couldn't open ${file.name}: ${err.message}`);
+  }
+});
+
+// restore the autosaved project on launch (resume where you left off)
+(async () => {
+  try {
+    const saved = await idbLoadProject();
+    if (saved && restoreProject(saved)) {
+      setStatus(`Resumed your last project — ${objects.length} object(s). Open a file to start over.`);
+    }
+  } catch (e) { console.warn('Autosave restore failed', e); }
+})();
+
 // debug hook for tests
 window.__mp.objects = () => objects;
 window.__mp.activeId = () => activeId;
+window.__mp.clearAutosave = idbClearProject;
 
 // ---- export ----
 

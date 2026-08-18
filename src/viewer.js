@@ -249,15 +249,19 @@ export class Viewer {
    * origin } where origin is the translation subtracted (add it back to recover
    * the object's original position).
    */
-  prepGeometry(positions) {
+  prepGeometry(positions, { center = true } = {}) {
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     geometry.computeVertexNormals();
     geometry.computeBoundingBox();
-    const bb = geometry.boundingBox;
-    const origin = { x: (bb.min.x + bb.max.x) / 2, y: (bb.min.y + bb.max.y) / 2, z: bb.min.z };
-    geometry.translate(-origin.x, -origin.y, -origin.z);
-    geometry.computeBoundingBox();
+    let origin = { x: 0, y: 0, z: 0 };
+    if (center) {
+      // positions are raw import coords — center on the plate and record offset
+      const bb = geometry.boundingBox;
+      origin = { x: (bb.min.x + bb.max.x) / 2, y: (bb.min.y + bb.max.y) / 2, z: bb.min.z };
+      geometry.translate(-origin.x, -origin.y, -origin.z);
+      geometry.computeBoundingBox();
+    }
     const count = geometry.attributes.position.count;
     geometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array(count * 3), 3));
     geometry.computeBoundsTree();
