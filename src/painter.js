@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { refineMesh } from './subdivide.js';
+import { buildMeshCachesFromPositions } from './meshcore.js';
+import { buildMeshCachesAsync } from './meshcache.js';
 
 const DEFAULT_COLORS = ['#d9d9d9', '#e53935', '#1e88e5', '#43a047', '#fdd835', '#8e24aa', '#fb8c00', '#00acc1'];
 const BLOCKER_TINT = new THREE.Color(0.55, 0.2, 0.75);
@@ -40,9 +42,10 @@ export class Painter {
     this.undoStack = [];
     this.redoStack = [];
     this._scrubs = null;
-    this.adjacency = buildAdjacency(mesh.geometry);
-    this.triNormals = computeTriNormals(mesh.geometry);
-    this.triCentroids = computeTriCentroids(mesh.geometry);
+    const caches = buildMeshCachesFromPositions(mesh.geometry.attributes.position.array);
+    this.adjacency = caches.adjacency;
+    this.triNormals = caches.triNormals;
+    this.triCentroids = caches.triCentroids;
     if (this.mirrorAxis) this.setSymmetry(this.mirrorAxis);
     this.repaintAll();
   }
@@ -52,7 +55,7 @@ export class Painter {
    * preserving group/blocker assignments per new triangle. Clears undo history
    * — geometry changes aren't undoable.
    */
-  adoptRefined(positions, triGroup, blocked) {
+  async adoptRefined(positions, triGroup, blocked) {
     const geo = this.mesh.geometry;
     const newGeo = new THREE.BufferGeometry();
     newGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
@@ -71,9 +74,11 @@ export class Painter {
     this.redoStack = [];
     this._strokeChanges = null;
     this._scrubs = null;
-    this.adjacency = buildAdjacency(newGeo);
-    this.triNormals = computeTriNormals(newGeo);
-    this.triCentroids = computeTriCentroids(newGeo);
+    // rebuild adjacency/normals/centroids off the main thread for big meshes
+    const caches = await buildMeshCachesAsync(newGeo.attributes.position.array);
+    this.adjacency = caches.adjacency;
+    this.triNormals = caches.triNormals;
+    this.triCentroids = caches.triCentroids;
     if (this.mirrorAxis) this.setSymmetry(this.mirrorAxis);
     this.repaintAll();
   }
@@ -284,7 +289,7 @@ export class Painter {
         onProgress,
       }
     );
-    this.adoptRefined(refined.positions, refined.triGroup, refined.blocked);
+    await this.adoptRefined(refined.positions, refined.triGroup, refined.blocked);
   }
 
   /**
@@ -308,7 +313,7 @@ export class Painter {
         this.triGroup, this.blocked, classify,
         { maxRounds: subdivide, minEdge: minEdgeVal, inScope, triInScope, maxEdge, onProgress }
       );
-      this.adoptRefined(refined.positions, refined.triGroup, refined.blocked);
+      await this.adoptRefined(refined.positions, refined.triGroup, refined.blocked);
     }
     const cen = this.triCentroids, N = this.triNormals;
     if (!subdivide) this.beginStroke();
@@ -863,16 +868,11 @@ export class Painter {
 
 /**
  * Build the per-triangle caches a Painter needs for a geometry, without
- * touching any live Painter — used to prepare shelved objects. Mirrors what
- * setMesh() computes internally.
+ * touching any live Painter — used to prepare shelved objects. Synchronous;
+ * see meshcache.js for the worker-backed async version.
  */
 export function buildMeshCaches(geometry) {
-  return {
-    triCount: geometry.attributes.position.count / 3,
-    adjacency: buildAdjacency(geometry),
-    triNormals: computeTriNormals(geometry),
-    triCentroids: computeTriCentroids(geometry),
-  };
+  return buildMeshCachesFromPositions(geometry.attributes.position.array);
 }
 
 /** Connected-component labels over the adjacency graph (disconnected shells).
@@ -945,67 +945,6 @@ class MinHeap {
   }
 }
 
-/**
- * Build triangle adjacency for non-indexed geometry by welding vertices on
- * exact coordinates (STL repeats identical floats for shared vertices).
- * Returns Int32Array of 3 neighbors per triangle, -1 where no neighbor.
- */
-function buildAdjacency(geometry) {
-  const pos = geometry.attributes.position;
-  const triCount = pos.count / 3;
-  const adjacency = new Int32Array(triCount * 3).fill(-1);
-
-  const vertId = new Int32Array(pos.count);
-  const seen = new Map();
-  let nextId = 0;
-  for (let i = 0; i < pos.count; i++) {
-    const key = pos.getX(i) + '_' + pos.getY(i) + '_' + pos.getZ(i);
-    let id = seen.get(key);
-    if (id === undefined) {
-      id = nextId++;
-      seen.set(key, id);
-    }
-    vertId[i] = id;
-  }
-
-  const edges = new Map();
-  for (let t = 0; t < triCount; t++) {
-    for (let e = 0; e < 3; e++) {
-      const a = vertId[t * 3 + e];
-      const b = vertId[t * 3 + ((e + 1) % 3)];
-      const key = a < b ? a + '_' + b : b + '_' + a;
-      const other = edges.get(key);
-      if (other === undefined) {
-        edges.set(key, t * 3 + e);
-      } else {
-        adjacency[t * 3 + e] = (other / 3) | 0;
-        adjacency[other] = t;
-        edges.delete(key); // manifold assumption: an edge joins at most 2 tris
-      }
-    }
-  }
-  return adjacency;
-}
-
-function computeTriNormals(geometry) {
-  const pos = geometry.attributes.position;
-  const triCount = pos.count / 3;
-  const normals = new Float32Array(triCount * 3);
-  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
-  for (let t = 0; t < triCount; t++) {
-    a.fromBufferAttribute(pos, t * 3);
-    b.fromBufferAttribute(pos, t * 3 + 1);
-    c.fromBufferAttribute(pos, t * 3 + 2);
-    b.sub(a);
-    c.sub(a);
-    b.cross(c).normalize();
-    normals[t * 3] = b.x;
-    normals[t * 3 + 1] = b.y;
-    normals[t * 3 + 2] = b.z;
-  }
-  return normals;
-}
-
 /** Squared distance from point (px,py,pz) to segment a-b. */
 function distSqToSegment(px, py, pz, a, b) {
   const abx = b.x - a.x, aby = b.y - a.y, abz = b.z - a.z;
@@ -1015,20 +954,4 @@ function distSqToSegment(px, py, pz, a, b) {
   s = Math.max(0, Math.min(1, s));
   const dx = apx - s * abx, dy = apy - s * aby, dz = apz - s * abz;
   return dx * dx + dy * dy + dz * dz;
-}
-
-function computeTriCentroids(geometry) {
-  const pos = geometry.attributes.position;
-  const triCount = pos.count / 3;
-  const cen = new Float32Array(triCount * 3);
-  for (let t = 0; t < triCount; t++) {
-    for (let axis = 0; axis < 3; axis++) {
-      cen[t * 3 + axis] = (
-        pos.array[(t * 3) * 3 + axis] +
-        pos.array[(t * 3 + 1) * 3 + axis] +
-        pos.array[(t * 3 + 2) * 3 + axis]
-      ) / 3;
-    }
-  }
-  return cen;
 }
