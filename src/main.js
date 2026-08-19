@@ -1623,6 +1623,28 @@ projectInput.addEventListener('change', async () => {
   } catch (e) { console.warn('Autosave restore failed', e); }
 })();
 
+// ---- PWA install prompt ----
+
+let deferredInstall = null;
+const installBtn = document.getElementById('btn-install');
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault(); // keep the event so we can trigger it from our own button
+  deferredInstall = e;
+  installBtn.hidden = false;
+});
+installBtn.addEventListener('click', async () => {
+  if (!deferredInstall) return;
+  deferredInstall.prompt();
+  await deferredInstall.userChoice;
+  deferredInstall = null;
+  installBtn.hidden = true;
+});
+window.addEventListener('appinstalled', () => {
+  deferredInstall = null;
+  installBtn.hidden = true;
+  setStatus('MultiPaint installed — it now works offline and opens in its own window.');
+});
+
 // debug hook for tests
 window.__mp.objects = () => objects;
 window.__mp.activeId = () => activeId;

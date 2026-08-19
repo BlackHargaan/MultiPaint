@@ -22,6 +22,18 @@ exports double as project save files. Bambu/Orca-painted 3MFs import too
 are picked up when present). Your filament palette (names + colors) is
 remembered between sessions automatically.
 
+### Install / offline
+
+MultiPaint is a PWA: from a `build` + `preview` (or any hosted deploy) the
+browser offers **⤓ Install** to run it in its own window, and a service worker
+caches the app shell so it **works fully offline** — combined with the
+IndexedDB autosave, you can install it, pull the network, and keep painting
+with your project intact. (The large sample STLs are deliberately not cached.)
+
+```sh
+npm run build && npm run preview
+```
+
 ## Controls
 
 | Input | Action |
