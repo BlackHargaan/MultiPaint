@@ -8,6 +8,7 @@ import { removeBackground } from './imagebg.js';
 import { parse3MF } from './import3mf.js';
 import { rasterizeGlyphs, buildPlacements, buildTextClassifier, buildLevelBaseline, glyphsTotalMm } from './curvedtext.js';
 import { idbSaveProject, idbLoadProject, idbClearProject, packProjectFile, unpackProjectFile } from './projectio.js';
+import { FILAMENTS, BRANDS, luminance } from './filaments.js';
 
 const viewer = new Viewer(document.getElementById('viewport'));
 const painter = new Painter();
@@ -1575,7 +1576,16 @@ function renderGroups() {
     });
     name.addEventListener('click', (e) => e.stopPropagation());
 
-    row.append(slot, color, name);
+    const lib = document.createElement('button');
+    lib.className = 'lib';
+    lib.textContent = '📚';
+    lib.title = 'Pick a real filament from the library';
+    lib.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openFilamentPicker(i);
+    });
+
+    row.append(slot, color, name, lib);
 
     if (i > 0) {
       const del = document.createElement('button');
@@ -1607,7 +1617,209 @@ document.getElementById('btn-add-group').addEventListener('click', () => {
   renderGroups();
 });
 
+// ---- filament library picker ----
+
+const filamentModal = document.getElementById('filament-modal');
+const flSearch = document.getElementById('fl-search');
+const flBrands = document.getElementById('fl-brands');
+const flGrid = document.getElementById('fl-grid');
+let flTarget = 1;       // group index the picked filament is applied to
+let flBrand = '';       // active brand filter ('' = all)
+
+function openFilamentPicker(groupIndex) {
+  flTarget = groupIndex;
+  renderFilamentBrands();
+  renderFilamentGrid();
+  filamentModal.hidden = false;
+  flSearch.focus();
+  flSearch.select();
+}
+
+function closeFilamentPicker() {
+  filamentModal.hidden = true;
+}
+
+/** Open the picker on a fresh group appended to the palette. */
+function addGroupFromLibrary() {
+  if (painter.groups.length >= 16) return setStatus('Slicers support at most 16 filaments.');
+  painter.addGroup();
+  renderGroups();
+  openFilamentPicker(painter.groups.length - 1);
+}
+
+function renderFilamentBrands() {
+  flBrands.innerHTML = '';
+  for (const b of ['All', ...BRANDS]) {
+    const chip = document.createElement('button');
+    chip.className = 'fl-chip' + ((b === 'All' ? '' : b) === flBrand ? ' active' : '');
+    chip.textContent = b;
+    chip.addEventListener('click', () => {
+      flBrand = b === 'All' ? '' : b;
+      renderFilamentBrands();
+      renderFilamentGrid();
+    });
+    flBrands.append(chip);
+  }
+}
+
+function renderFilamentGrid() {
+  const q = flSearch.value.trim().toLowerCase();
+  const matches = FILAMENTS.filter((f) => {
+    if (flBrand && f.brand !== flBrand) return false;
+    if (!q) return true;
+    return (f.name + ' ' + f.brand + ' ' + f.material + ' ' + f.hex).toLowerCase().includes(q);
+  });
+  flGrid.innerHTML = '';
+  if (!matches.length) {
+    const empty = document.createElement('div');
+    empty.className = 'fl-empty';
+    empty.textContent = 'No filaments match your search.';
+    flGrid.append(empty);
+    return;
+  }
+  for (const f of matches) {
+    const sw = document.createElement('button');
+    sw.className = 'fl-swatch';
+    sw.title = `${f.name} — ${f.brand} ${f.material}`;
+
+    const chip = document.createElement('span');
+    chip.className = 'fl-chipcolor';
+    chip.style.background = f.hex;
+    chip.style.color = luminance(f.hex) > 0.6 ? '#0008' : '#fffc';
+    chip.textContent = f.hex.toUpperCase();
+
+    const nm = document.createElement('span');
+    nm.className = 'fl-name';
+    nm.textContent = f.name;
+
+    const meta = document.createElement('span');
+    meta.className = 'fl-meta';
+    meta.textContent = f.material === '—' ? f.brand : `${f.brand} · ${f.material}`;
+
+    sw.append(chip, nm, meta);
+    sw.addEventListener('click', () => applyFilament(f));
+    flGrid.append(sw);
+  }
+}
+
+function applyFilament(f) {
+  const g = painter.groups[flTarget];
+  if (!g) return;
+  g.color = f.hex;
+  g.name = f.name;
+  painter.refreshGroupColor(flTarget);
+  painter.activeGroup = flTarget;
+  renderGroups();          // persists palette + markDirty
+  refreshGhosts();
+  closeFilamentPicker();
+  setStatus(`Group ${flTarget + 1} set to ${f.name} (${f.brand}).`);
+}
+
+flSearch.addEventListener('input', renderFilamentGrid);
+filamentModal.querySelectorAll('[data-close]').forEach((el) =>
+  el.addEventListener('click', closeFilamentPicker));
+document.getElementById('btn-add-library').addEventListener('click', addGroupFromLibrary);
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !filamentModal.hidden) closeFilamentPicker();
+});
+
+// ---- saved filament / AMS setups ----
+
+const amsSelect = document.getElementById('ams-select');
+const amsDelBtn = document.getElementById('btn-ams-del');
+
+function loadAmsPresets() {
+  try {
+    const obj = JSON.parse(localStorage.getItem('multipaint-ams-presets') || '{}');
+    return obj && typeof obj === 'object' ? obj : {};
+  } catch { return {}; }
+}
+
+function storeAmsPresets(obj) {
+  try { localStorage.setItem('multipaint-ams-presets', JSON.stringify(obj)); }
+  catch { /* storage unavailable */ }
+}
+
+function renderAmsSelect() {
+  const presets = loadAmsPresets();
+  const names = Object.keys(presets).sort((a, b) => a.localeCompare(b));
+  amsSelect.innerHTML = '<option value="">Saved setups…</option>';
+  for (const n of names) {
+    const opt = document.createElement('option');
+    opt.value = n;
+    opt.textContent = `${n} (${presets[n].length})`;
+    amsSelect.append(opt);
+  }
+  amsDelBtn.disabled = !amsSelect.value;
+}
+
+/** Highest group index referenced by any object's paint, so a smaller preset
+ *  can't orphan painted triangles. */
+function maxUsedGroup() {
+  let m = 0;
+  const scan = (arr) => { if (arr) for (let i = 0; i < arr.length; i++) if (arr[i] > m) m = arr[i]; };
+  for (const o of objects) scan(o.triGroup);
+  scan(painter.triGroup);
+  return m;
+}
+
+function applyAmsPreset(list) {
+  const groups = list.map((s) => ({
+    name: String(s.name || 'Color'),
+    color: /^#[0-9a-f]{6}$/i.test(s.color) ? s.color : '#d9d9d9',
+  }));
+  // never drop slots that painted triangles still reference
+  const need = maxUsedGroup() + 1;
+  while (groups.length < need) {
+    const old = painter.groups[groups.length];
+    groups.push(old
+      ? { name: old.name, color: old.color }
+      : { name: 'Color ' + (groups.length + 1), color: '#d9d9d9' });
+  }
+  painter.groups = groups;
+  painter.activeGroup = Math.min(Math.max(painter.activeGroup, 1), groups.length - 1);
+  if (painter.mesh) painter.repaintAll();
+  renderGroups();
+  refreshGhosts();
+  const kept = groups.length - list.length;
+  setStatus(`Loaded setup — ${list.length} filament${list.length === 1 ? '' : 's'}`
+    + (kept > 0 ? `, kept ${kept} extra in-use group${kept === 1 ? '' : 's'}.` : '.'));
+}
+
+amsSelect.addEventListener('change', () => {
+  amsDelBtn.disabled = !amsSelect.value;
+  if (!amsSelect.value) return;
+  const presets = loadAmsPresets();
+  const list = presets[amsSelect.value];
+  if (Array.isArray(list) && list.length) applyAmsPreset(list);
+});
+
+document.getElementById('btn-ams-save').addEventListener('click', () => {
+  const suggested = amsSelect.value || 'My AMS';
+  const name = prompt('Save current filament groups as setup named:', suggested);
+  if (!name || !name.trim()) return;
+  const presets = loadAmsPresets();
+  presets[name.trim()] = painter.groups.map((g) => ({ name: g.name, color: g.color }));
+  storeAmsPresets(presets);
+  renderAmsSelect();
+  amsSelect.value = name.trim();
+  amsDelBtn.disabled = false;
+  setStatus(`Saved setup "${name.trim()}" (${painter.groups.length} filaments).`);
+});
+
+amsDelBtn.addEventListener('click', () => {
+  const name = amsSelect.value;
+  if (!name) return;
+  if (!confirm(`Delete saved setup "${name}"?`)) return;
+  const presets = loadAmsPresets();
+  delete presets[name];
+  storeAmsPresets(presets);
+  renderAmsSelect();
+  setStatus(`Deleted setup "${name}".`);
+});
+
 restorePalette();
+renderAmsSelect();
 renderGroups();
 renderObjectList();
 
