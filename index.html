@@ -172,6 +172,22 @@
           filament slot it will be assigned to in the slicer.</p>
           </details>
           <details class="panel">
+            <summary>Printability</summary>
+          <label class="proj-opt" title="Smallest colour patch (in mm) that will still print as a distinct colour. Painted regions narrower than this won't reproduce cleanly on an FDM printer — roughly a few nozzle widths.">Min feature (mm)
+            <input type="range" id="pf-size" data-default="2" min="0.4" max="6" step="0.1" value="2" />
+            <span id="pf-size-val">2.0</span>
+          </label>
+          <div id="pf-actions">
+            <button id="btn-pf-check" class="btn">Check active object</button>
+            <button id="btn-pf-fix" class="btn" disabled title="Absorb every flagged patch into its surrounding colour (one undoable step)">Fix flagged</button>
+            <button id="btn-pf-clear" class="btn" disabled title="Hide the highlight">Clear</button>
+          </div>
+          <p class="hint" id="pf-result">Highlights painted regions too small or
+          thin to print as a distinct colour, so you can grow or remove them
+          before export. <b>Fix flagged</b> absorbs them into the surrounding
+          colour.</p>
+          </details>
+          <details class="panel">
             <summary>Image projection</summary>
           <div id="projection">
             <button id="btn-decal-load">Load decal image…</button>
@@ -303,7 +319,16 @@
           <span class="modal-title">Filament library</span>
           <button id="fl-close" class="modal-x" title="Close" data-close>✕</button>
         </div>
-        <input id="fl-search" type="text" placeholder="Search colour, brand or material…" autocomplete="off" />
+        <div class="fl-searchrow">
+          <input id="fl-search" type="text" placeholder="Search colour, brand or material…" autocomplete="off" />
+          <button id="fl-addbtn" class="btn" title="Add your own filament to the library">＋ Custom</button>
+        </div>
+        <div id="fl-addform" hidden>
+          <input id="fl-add-name" type="text" placeholder="Filament name (e.g. eSun PLA+ Cyan)" autocomplete="off" />
+          <input id="fl-add-color" type="color" value="#3aa0ff" title="Colour" />
+          <button id="fl-add-save" class="btn btn-primary">Add</button>
+          <button id="fl-add-cancel" class="btn">Cancel</button>
+        </div>
         <div id="fl-brands" class="fl-brands"></div>
         <div id="fl-grid" class="fl-grid"></div>
         <p class="hint fl-note">On-screen colours approximate the manufacturer

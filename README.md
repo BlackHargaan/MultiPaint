@@ -132,6 +132,12 @@ with the swatch, double-click nothing — just type in its name field to rename.
   picker straight away. On-screen colors approximate each manufacturer's swatch
   for preview — your slicer still applies its own filament profile for the
   printed color and AMS assignment.
+- **Custom filaments** — add your own with **＋ Custom** in the picker (name +
+  color); they live under a **My filaments** section you can delete from, stored
+  in your browser. **＋ From library** (below the groups) adds a new group and
+  opens the picker straight away.
+- **Recent** — filaments you've applied show up under a **Recent** chip, so
+  reaching for a color you just used is one click.
 - **Saved setups** — save your current groups as a named setup (e.g. your AMS
   loadout) and reload it on any project from the **Saved setups…** dropdown;
   the ✕ deletes the selected one. Setups are stored in your browser. Loading a
@@ -140,6 +146,26 @@ with the swatch, double-click nothing — just type in its name field to rename.
 
 The palette is shared across all objects on the shelf, so slot 1 is the same
 filament everywhere, and it's saved with autosave and `.mpaint` projects.
+
+## Printability check
+
+FDM color printing paints one filament per region per layer, so a colored patch
+only a nozzle-width wide won't reproduce — it smears or vanishes. The
+**Printability** panel finds those before you export:
+
+- **Min feature (mm)** — the smallest color patch that should still print as a
+  distinct color (default 2 mm, roughly a few nozzle widths).
+- **Check active object** — highlights, in red on top of the model, every
+  painted patch narrower than that (width is estimated from each patch's area
+  and the length of its color border, so it catches both thin slivers and tiny
+  specks). The status line reports how many patches are below the limit and the
+  thinnest one; if everything passes it says so.
+- **Fix flagged** — absorbs every flagged patch into its dominant neighboring
+  color in one undoable step, so you can clean up unprintable detail instantly.
+- **Clear** — hides the highlight.
+
+Only patches that border a *different* color count as features, so a whole
+one-color object is never flagged — just the detail that's too fine to print.
 
 ## Image projection
 
@@ -284,7 +310,8 @@ land where they belong on the plate. Unpainted (Base) faces print on slot 1.
 
 - `src/viewer.js` — Three.js scene, STL parsing, geometry prep, BVH picking
 - `src/painter.js` — per-triangle group model, adjacency, paint tools, undo,
-  mirror, mesh-cache/connected-component helpers for the shelf
+  mirror, printability report / auto-fix, mesh-cache/connected-component
+  helpers for the shelf
 - `src/filaments.js` — curated real-world filament catalog for the library picker
 - `src/meshcore.js` — pure per-triangle caches (adjacency, normals, centroids)
 - `src/meshcache.js` + `src/meshcache.worker.js` — build those caches in a Web

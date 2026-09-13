@@ -360,6 +360,12 @@ main {
 }
 #region-ops button { font-size: 12px; padding: 5px 9px; flex: 1 1 auto; }
 
+#pf-actions { display: flex; flex-wrap: wrap; gap: 5px; margin: 8px 0; }
+#pf-actions button { font-size: 12px; padding: 5px 9px; flex: 1 1 auto; }
+#btn-pf-check { flex-basis: 100%; }
+#pf-result.warn { color: #ffb0be; }
+#pf-result.ok { color: #7fd6a0; }
+
 /* ---------- object shelf ---------- */
 #object-list { margin-bottom: 6px; }
 .object-row {
@@ -507,10 +513,11 @@ main {
   padding: 4px 8px;
 }
 .modal-x:hover { color: var(--text); background: none; }
+.fl-searchrow { display: flex; gap: 8px; margin-bottom: 10px; }
 #fl-search {
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   padding: 8px 10px;
-  margin-bottom: 10px;
   background: var(--bg);
   border: 1px solid var(--line-soft);
   border-radius: 6px;
@@ -518,6 +525,30 @@ main {
   font-size: 14px;
 }
 #fl-search:focus { outline: none; border-color: var(--accent); }
+#fl-addbtn { flex: 0 0 auto; }
+#fl-addform {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 10px;
+  padding: 10px;
+  background: var(--bg);
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+}
+#fl-add-name {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 9px;
+  background: var(--panel);
+  border: 1px solid var(--line-soft);
+  border-radius: 5px;
+  color: var(--text);
+  font-size: 13px;
+}
+#fl-add-name:focus { outline: none; border-color: var(--accent); }
+#fl-add-color { width: 34px; height: 32px; border: none; background: none; padding: 0; cursor: pointer; flex: 0 0 auto; }
+#fl-add-save, #fl-add-cancel { flex: 0 0 auto; padding: 6px 10px; }
 .fl-brands {
   display: flex;
   flex-wrap: wrap;
@@ -560,6 +591,22 @@ main {
   overflow: hidden;
 }
 .fl-swatch:hover { border-color: var(--accent); background: var(--btn-hover); }
+.fl-swatch { position: relative; }
+.fl-del {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  line-height: 1;
+  font-size: 11px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.45);
+  border: none;
+  color: #fff;
+}
+.fl-del:hover { background: #ff3b6b; }
 .fl-chipcolor {
   flex: 0 0 34px;
   height: 34px;
