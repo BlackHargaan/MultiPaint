@@ -114,6 +114,7 @@ function activate(id, { frame = false } = {}) {
   viewer.setMirrorPlane(painter.mirrorAxis);
   painter.repaintAll();
   clearLine();
+  if (typeof clearPrintability === 'function') clearPrintability();
   modelName = o.name;
   renderObjectList();
   refreshGhosts();
@@ -1262,6 +1263,57 @@ document.getElementById('btn-clear-blockers').addEventListener('click', () => {
   setStatus('Cleared all blockers.');
 });
 
+// ---- printability / min-feature checker ----
+
+const pfSize = document.getElementById('pf-size');
+const pfSizeVal = document.getElementById('pf-size-val');
+const pfResult = document.getElementById('pf-result');
+const pfFixBtn = document.getElementById('btn-pf-fix');
+const pfClearBtn = document.getElementById('btn-pf-clear');
+
+pfSize.addEventListener('input', () => { pfSizeVal.textContent = Number(pfSize.value).toFixed(1); });
+
+function clearPrintability() {
+  viewer.setPrintabilityHighlight(null);
+  pfFixBtn.disabled = true;
+  pfClearBtn.disabled = true;
+  pfResult.className = 'hint';
+}
+
+function runPrintabilityCheck() {
+  if (!painter.mesh) return setStatus('Open a file first.');
+  const mm = Number(pfSize.value);
+  const rep = painter.printabilityReport(mm);
+  viewer.setPrintabilityHighlight([...rep.flagged]);
+  pfClearBtn.disabled = false;
+  if (!rep.regions.length) {
+    pfFixBtn.disabled = true;
+    pfResult.className = 'hint ok';
+    pfResult.textContent = rep.patches
+      ? `✓ All ${rep.patches} colour patch(es) are at least ${mm.toFixed(1)} mm wide — good to print.`
+      : 'Nothing painted yet on this object.';
+    return;
+  }
+  pfFixBtn.disabled = false;
+  pfResult.className = 'hint warn';
+  const thinnest = rep.regions[0].width;
+  pfResult.textContent = `⚠ ${rep.regions.length} of ${rep.patches} colour patch(es) `
+    + `are below ${mm.toFixed(1)} mm (thinnest ≈ ${thinnest.toFixed(2)} mm) — highlighted in red. `
+    + `They won't print as a distinct colour. Grow them, or Fix flagged to absorb them.`;
+}
+
+document.getElementById('btn-pf-check').addEventListener('click', runPrintabilityCheck);
+pfClearBtn.addEventListener('click', clearPrintability);
+pfFixBtn.addEventListener('click', () => {
+  if (!painter.mesh) return;
+  const mm = Number(pfSize.value);
+  const { regions, tris } = painter.fixSmallRegions(mm);
+  markDirty();
+  if (!regions) { setStatus('No flagged regions to fix.'); return; }
+  setStatus(`Absorbed ${regions} unprintable patch(es) (${tris} triangles) into surrounding colours.`);
+  runPrintabilityCheck(); // refresh highlight with what's left
+});
+
 // ---- mirror / symmetry ----
 
 document.getElementById('mirror-axis').addEventListener('change', (e) => {
@@ -1628,6 +1680,7 @@ let flBrand = '';       // active brand filter ('' = all)
 
 function openFilamentPicker(groupIndex) {
   flTarget = groupIndex;
+  document.getElementById('fl-addform').hidden = true;
   renderFilamentBrands();
   renderFilamentGrid();
   filamentModal.hidden = false;
@@ -1647,9 +1700,41 @@ function addGroupFromLibrary() {
   openFilamentPicker(painter.groups.length - 1);
 }
 
+const CUSTOM_BRAND = 'My filaments';
+
+function loadCustomFilaments() {
+  try {
+    const a = JSON.parse(localStorage.getItem('multipaint-custom-filaments') || '[]');
+    return Array.isArray(a) ? a.filter((f) => f && /^#[0-9a-f]{6}$/i.test(f.hex) && f.name) : [];
+  } catch { return []; }
+}
+function storeCustomFilaments(a) {
+  try { localStorage.setItem('multipaint-custom-filaments', JSON.stringify(a)); } catch { /* */ }
+}
+function loadRecentFilaments() {
+  try {
+    const a = JSON.parse(localStorage.getItem('multipaint-recent-filaments') || '[]');
+    return Array.isArray(a) ? a.filter((f) => f && /^#[0-9a-f]{6}$/i.test(f.hex) && f.name) : [];
+  } catch { return []; }
+}
+function recordRecentFilament(f) {
+  const entry = { name: f.name, brand: f.brand, material: f.material, hex: f.hex };
+  const list = loadRecentFilaments().filter(
+    (r) => !(r.hex.toLowerCase() === entry.hex.toLowerCase() && r.name === entry.name));
+  list.unshift(entry);
+  try { localStorage.setItem('multipaint-recent-filaments', JSON.stringify(list.slice(0, 12))); } catch { /* */ }
+}
+
+function brandChips() {
+  const chips = ['All'];
+  if (loadRecentFilaments().length) chips.push('Recent');
+  chips.push(CUSTOM_BRAND);
+  return chips.concat(BRANDS);
+}
+
 function renderFilamentBrands() {
   flBrands.innerHTML = '';
-  for (const b of ['All', ...BRANDS]) {
+  for (const b of brandChips()) {
     const chip = document.createElement('button');
     chip.className = 'fl-chip' + ((b === 'All' ? '' : b) === flBrand ? ' active' : '');
     chip.textContent = b;
@@ -1662,10 +1747,18 @@ function renderFilamentBrands() {
   }
 }
 
+/** The list of filaments to show for the current brand filter (before search). */
+function filamentsForBrand() {
+  const customs = loadCustomFilaments().map((f) => ({ ...f, brand: CUSTOM_BRAND, material: 'Custom' }));
+  if (flBrand === 'Recent') return loadRecentFilaments();
+  if (flBrand === CUSTOM_BRAND) return customs;
+  if (!flBrand) return [...customs, ...FILAMENTS];
+  return FILAMENTS.filter((f) => f.brand === flBrand);
+}
+
 function renderFilamentGrid() {
   const q = flSearch.value.trim().toLowerCase();
-  const matches = FILAMENTS.filter((f) => {
-    if (flBrand && f.brand !== flBrand) return false;
+  const matches = filamentsForBrand().filter((f) => {
     if (!q) return true;
     return (f.name + ' ' + f.brand + ' ' + f.material + ' ' + f.hex).toLowerCase().includes(q);
   });
@@ -1673,7 +1766,11 @@ function renderFilamentGrid() {
   if (!matches.length) {
     const empty = document.createElement('div');
     empty.className = 'fl-empty';
-    empty.textContent = 'No filaments match your search.';
+    empty.textContent = flBrand === CUSTOM_BRAND
+      ? 'No custom filaments yet — add one with ＋ Custom above.'
+      : flBrand === 'Recent'
+        ? 'No filaments used yet.'
+        : 'No filaments match your search.';
     flGrid.append(empty);
     return;
   }
@@ -1698,6 +1795,21 @@ function renderFilamentGrid() {
 
     sw.append(chip, nm, meta);
     sw.addEventListener('click', () => applyFilament(f));
+
+    if (flBrand === CUSTOM_BRAND) {
+      const del = document.createElement('button');
+      del.className = 'fl-del';
+      del.textContent = '✕';
+      del.title = 'Delete this custom filament';
+      del.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const rest = loadCustomFilaments().filter(
+          (c) => !(c.name === f.name && c.hex.toLowerCase() === f.hex.toLowerCase()));
+        storeCustomFilaments(rest);
+        renderFilamentGrid();
+      });
+      sw.append(del);
+    }
     flGrid.append(sw);
   }
 }
@@ -1709,11 +1821,36 @@ function applyFilament(f) {
   g.name = f.name;
   painter.refreshGroupColor(flTarget);
   painter.activeGroup = flTarget;
+  recordRecentFilament(f);
   renderGroups();          // persists palette + markDirty
   refreshGhosts();
   closeFilamentPicker();
   setStatus(`Group ${flTarget + 1} set to ${f.name} (${f.brand}).`);
 }
+
+// custom-filament add form
+const flAddForm = document.getElementById('fl-addform');
+const flAddName = document.getElementById('fl-add-name');
+const flAddColor = document.getElementById('fl-add-color');
+function showAddForm(show) {
+  flAddForm.hidden = !show;
+  if (show) { flAddName.value = ''; flAddName.focus(); }
+}
+document.getElementById('fl-addbtn').addEventListener('click', () => showAddForm(flAddForm.hidden));
+document.getElementById('fl-add-cancel').addEventListener('click', () => showAddForm(false));
+document.getElementById('fl-add-save').addEventListener('click', () => {
+  const name = flAddName.value.trim();
+  if (!name) { flAddName.focus(); return; }
+  const hex = flAddColor.value;
+  const list = loadCustomFilaments();
+  list.unshift({ brand: CUSTOM_BRAND, material: 'Custom', name, hex });
+  storeCustomFilaments(list);
+  showAddForm(false);
+  flBrand = CUSTOM_BRAND;
+  renderFilamentBrands();
+  renderFilamentGrid();
+});
+flAddName.addEventListener('keydown', (e) => { if (e.key === 'Enter') document.getElementById('fl-add-save').click(); });
 
 flSearch.addEventListener('input', renderFilamentGrid);
 filamentModal.querySelectorAll('[data-close]').forEach((el) =>

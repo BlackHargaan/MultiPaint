@@ -86,6 +86,19 @@ export class Viewer {
     this.mirrorPlane.visible = false;
     this.scene.add(this.mirrorPlane);
 
+    // printability warning overlay (flagged triangles, drawn on top)
+    this.highlightMesh = new THREE.Mesh(
+      new THREE.BufferGeometry(),
+      new THREE.MeshBasicMaterial({
+        color: 0xff3b6b, transparent: true, opacity: 0.85,
+        side: THREE.DoubleSide, depthTest: false, depthWrite: false,
+        polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
+      })
+    );
+    this.highlightMesh.renderOrder = 999;
+    this.highlightMesh.visible = false;
+    this.scene.add(this.highlightMesh);
+
     window.addEventListener('resize', () => this.resize());
     this.resize();
 
@@ -387,6 +400,29 @@ export class Viewer {
     else if (axis === 'y') this.mirrorPlane.rotation.set(Math.PI / 2, 0, 0);
     else this.mirrorPlane.rotation.set(0, 0, 0);
     this.mirrorPlane.visible = true;
+  }
+
+  /** Overlay the given triangle indices (into the current mesh) in a warning
+   *  colour, drawn on top. Pass null/empty to clear. */
+  setPrintabilityHighlight(triIndices) {
+    if (!this.mesh || !triIndices || !triIndices.length) {
+      this.highlightMesh.visible = false;
+      this.highlightMesh.geometry.setAttribute(
+        'position', new THREE.BufferAttribute(new Float32Array(0), 3));
+      return;
+    }
+    const src = this.mesh.geometry.attributes.position.array;
+    const pos = new Float32Array(triIndices.length * 9);
+    let o = 0;
+    for (const t of triIndices) {
+      pos.set(src.subarray(t * 9, t * 9 + 9), o);
+      o += 9;
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    this.highlightMesh.geometry.dispose();
+    this.highlightMesh.geometry = g;
+    this.highlightMesh.visible = true;
   }
 
   updateBrushCursor(hit, radius, color = 0xffffff) {

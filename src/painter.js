@@ -858,6 +858,113 @@ export class Painter {
     return toFree.length;
   }
 
+  /** Area (mm²) of triangle t from the live position buffer. */
+  _triArea(t) {
+    const p = this.mesh.geometry.attributes.position.array;
+    const o = t * 9;
+    const ux = p[o + 3] - p[o], uy = p[o + 4] - p[o + 1], uz = p[o + 5] - p[o + 2];
+    const vx = p[o + 6] - p[o], vy = p[o + 7] - p[o + 1], vz = p[o + 8] - p[o + 2];
+    const cx = uy * vz - uz * vy, cy = uz * vx - ux * vz, cz = ux * vy - uy * vx;
+    return 0.5 * Math.hypot(cx, cy, cz);
+  }
+
+  /** Length (mm) of edge e (local verts e → (e+1)%3) of triangle t. */
+  _edgeLen(t, e) {
+    const p = this.mesh.geometry.attributes.position.array;
+    const a = (t * 3 + e) * 3, b = (t * 3 + ((e + 1) % 3)) * 3;
+    return Math.hypot(p[b] - p[a], p[b + 1] - p[a + 1], p[b + 2] - p[a + 2]);
+  }
+
+  /**
+   * Find painted colour patches whose narrowest dimension is below
+   * `minFeature` mm — regions too small/thin to reproduce as a distinct
+   * colour when printed (each layer paints one colour per region, so a patch
+   * only a nozzle-width wide smears or vanishes).
+   *
+   * Width is estimated as 2·area / contrast-boundary-length: for a strip of
+   * width w this is ≈ w, for a disc it's the radius — a conservative proxy
+   * that catches both thin slivers and tiny specks. Only patches that border
+   * a different colour count (a whole one-colour shell isn't a feature).
+   * Returns { regions:[{group,tris,area,width}] sorted thinnest-first,
+   * flagged:Set<tri>, patches:totalContrastingPatches }.
+   */
+  printabilityReport(minFeature) {
+    const out = { regions: [], flagged: new Set(), patches: 0 };
+    if (!this.mesh) return out;
+    const N = this.triCount;
+    const comp = new Int32Array(N).fill(-1);
+    const members = [];
+    const stack = [];
+    for (let t0 = 0; t0 < N; t0++) {
+      if (comp[t0] >= 0) continue;
+      const id = members.length;
+      comp[t0] = id;
+      const list = [];
+      stack.length = 0;
+      stack.push(t0);
+      while (stack.length) {
+        const t = stack.pop();
+        list.push(t);
+        for (let e = 0; e < 3; e++) {
+          const n = this.adjacency[t * 3 + e];
+          if (n >= 0 && comp[n] < 0 && this.triGroup[n] === this.triGroup[t]) {
+            comp[n] = id;
+            stack.push(n);
+          }
+        }
+      }
+      members.push(list);
+    }
+    for (const list of members) {
+      const own = this.triGroup[list[0]];
+      let area = 0, bound = 0, contrast = false;
+      for (const t of list) {
+        area += this._triArea(t);
+        for (let e = 0; e < 3; e++) {
+          const n = this.adjacency[t * 3 + e];
+          if (n < 0) { bound += this._edgeLen(t, e); continue; }
+          if (this.triGroup[n] !== own) { bound += this._edgeLen(t, e); contrast = true; }
+        }
+      }
+      if (!contrast) continue; // whole one-colour shell, not a colour feature
+      out.patches++;
+      const width = bound > 0 ? (2 * area) / bound : 0;
+      if (width < minFeature) {
+        out.regions.push({ group: own, tris: list, area, width });
+        for (const t of list) out.flagged.add(t);
+      }
+    }
+    out.regions.sort((a, b) => a.width - b.width);
+    return out;
+  }
+
+  /** Absorb sub-`minFeature` colour patches into their dominant neighbouring
+   *  colour (one undoable step). Returns { regions, tris }. */
+  fixSmallRegions(minFeature) {
+    const rep = this.printabilityReport(minFeature);
+    if (!rep.regions.length) return { regions: 0, tris: 0 };
+    this.beginStroke();
+    let tris = 0;
+    for (const r of rep.regions) {
+      const counts = new Map();
+      for (const t of r.tris) {
+        for (let e = 0; e < 3; e++) {
+          const n = this.adjacency[t * 3 + e];
+          if (n >= 0 && this.triGroup[n] !== r.group) {
+            counts.set(this.triGroup[n], (counts.get(this.triGroup[n]) || 0) + 1);
+          }
+        }
+      }
+      if (!counts.size) continue;
+      let best = r.group, bc = -1;
+      for (const [g, c] of counts) if (c > bc) { best = g; bc = c; }
+      for (const t of r.tris) { this._assign(t, best); tris++; }
+    }
+    this.endStroke();
+    this.mesh.geometry.attributes.color.needsUpdate = true;
+    return { regions: rep.regions.length, tris };
+  }
+
   /** Triangle counts per group, e.g. to warn about empty groups on export. */
   groupStats() {
     const counts = new Array(this.groups.length).fill(0);
