@@ -118,6 +118,29 @@ taken — handy for checking the projection result or re-shooting.
   triangulated, and undo covers both sides in one step. Decal/text projection
   aren't mirrored — use the tools above for symmetric detailing.
 
+## Filament groups & library
+
+Each group is a color you paint with; its number is the filament slot it maps to
+in the slicer (slot 1 is Base). Click a group to make it active, pick a color
+with the swatch, double-click nothing — just type in its name field to rename.
+
+- **Filament library** (📚 on any group, or **＋ From library**) — opens a
+  browsable catalog of real-world filaments (Bambu Lab PLA Basic & Matte,
+  Polymaker PolyTerra, Prusament, Hatchbox, and generics). Search by color,
+  brand or material, filter by brand, and click a swatch to set that group's
+  color **and** name in one go. ＋ From library adds a new group and opens the
+  picker straight away. On-screen colors approximate each manufacturer's swatch
+  for preview — your slicer still applies its own filament profile for the
+  printed color and AMS assignment.
+- **Saved setups** — save your current groups as a named setup (e.g. your AMS
+  loadout) and reload it on any project from the **Saved setups…** dropdown;
+  the ✕ deletes the selected one. Setups are stored in your browser. Loading a
+  setup never drops a slot that painted triangles still use — extra in-use
+  groups are kept and the status bar says so.
+
+The palette is shared across all objects on the shelf, so slot 1 is the same
+filament everywhere, and it's saved with autosave and `.mpaint` projects.
+
 ## Image projection
 
 Two ways to paint in 2D and apply in 3D (sidebar, bottom section):
@@ -262,6 +285,7 @@ land where they belong on the plate. Unpainted (Base) faces print on slot 1.
 - `src/viewer.js` — Three.js scene, STL parsing, geometry prep, BVH picking
 - `src/painter.js` — per-triangle group model, adjacency, paint tools, undo,
   mirror, mesh-cache/connected-component helpers for the shelf
+- `src/filaments.js` — curated real-world filament catalog for the library picker
 - `src/meshcore.js` — pure per-triangle caches (adjacency, normals, centroids)
 - `src/meshcache.js` + `src/meshcache.worker.js` — build those caches in a Web
   Worker for big meshes (import and post-subdivision rebuild) so the UI doesn't

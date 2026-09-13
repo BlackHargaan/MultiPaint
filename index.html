@@ -150,8 +150,18 @@
           </details>
           <details class="panel" open>
             <summary>Filament groups</summary>
+          <div id="ams-presets">
+            <select id="ams-select" class="proj-select" title="Load a saved filament / AMS setup">
+              <option value="">Saved setups…</option>
+            </select>
+            <button id="btn-ams-save" class="btn" title="Save the current groups as a reusable filament setup">Save…</button>
+            <button id="btn-ams-del" class="btn" title="Delete the selected saved setup" disabled>✕</button>
+          </div>
           <div id="groups"></div>
-          <button id="btn-add-group" class="btn">+ Add group</button>
+          <div id="group-add-row">
+            <button id="btn-add-group" class="btn">+ Add group</button>
+            <button id="btn-add-library" class="btn" title="Add a group by picking a real filament from the library">＋ From library</button>
+          </div>
           <div id="region-ops">
             <button id="btn-grow" class="btn" title="Expand the active group's region by one triangle ring (+)">Grow</button>
             <button id="btn-shrink" class="btn" title="Contract the active group's region by one triangle ring (-)">Shrink</button>
@@ -285,6 +295,21 @@
         </aside>
       </main>
       <div id="statusbar">Open an STL to get started.</div>
+    </div>
+    <div id="filament-modal" class="modal" hidden>
+      <div class="modal-backdrop" data-close></div>
+      <div class="modal-card">
+        <div class="modal-head">
+          <span class="modal-title">Filament library</span>
+          <button id="fl-close" class="modal-x" title="Close" data-close>✕</button>
+        </div>
+        <input id="fl-search" type="text" placeholder="Search colour, brand or material…" autocomplete="off" />
+        <div id="fl-brands" class="fl-brands"></div>
+        <div id="fl-grid" class="fl-grid"></div>
+        <p class="hint fl-note">On-screen colours approximate the manufacturer
+        swatch for preview; your slicer applies its own filament profile for the
+        printed colour and AMS assignment.</p>
+      </div>
     </div>
     <script type="module" src="/src/main.js"></script>
   </body>
