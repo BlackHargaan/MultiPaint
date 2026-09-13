@@ -98,7 +98,7 @@ main {
   position: relative;
   min-width: 0;
 }
-#viewport canvas { display: block; }
+#viewport canvas { display: block; touch-action: none; }
 
 #sidebar {
   width: 270px;

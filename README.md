@@ -42,6 +42,9 @@ npm run build && npm run preview
 | Middle-drag | Rotate |
 | Right-drag | Pan |
 | Scroll | Zoom |
+| One finger / stylus | Paint with the active tool |
+| Two fingers | Orbit (drag) + zoom (pinch) |
+| Pen pressure | Modulates brush size (harder = wider) |
 | `B` / `F` / `I` / `X` / `L` | Brush / Smart Fill / Island Fill / Blocker / Line |
 | Alt+drag | Erase (paint → base, blockers → removed) |
 | `Backspace` | Remove last line point (Line tool) |

@@ -48,6 +48,11 @@ let strokePath = [];      // brush hit points, for crisp-edge subdivision
 let strokeErase = false;
 let refining = false;     // blocks input while a stroke is being subdivided
 
+// touch/stylus arbitration: one finger/pen paints, two fingers orbit+zoom
+const activePointers = new Set();
+let gesture = false;      // 2+ pointers down → camera navigation, not painting
+let pendingTap = null;    // deferred line/text point (placed on a clean tap)
+
 function setStatus(msg) {
   status.textContent = msg;
 }
@@ -1362,37 +1367,73 @@ function adjustBrush(dir) {
 
 const canvas = viewer.renderer.domElement;
 
-canvas.addEventListener('pointerdown', (e) => {
-  if (e.button !== 0 || !painter.mesh || refining) return;
-  const hit = viewer.pick(e);
-  if (!hit) return;
-  if (textPlacing) {
-    textAnchor = { point: hit.point.clone(), tri: hit.faceIndex };
+/** Effective brush radius, scaled by stylus pressure (pen only). */
+function effRadius(e) {
+  if (e.pointerType === 'pen' && e.pressure > 0) return brushRadius * (0.35 + 0.65 * e.pressure);
+  return brushRadius;
+}
+
+/** Place a deferred line/text point (committed on a clean single-finger tap). */
+function placeTapPoint(pt) {
+  if (pt.kind === 'text') {
+    textAnchor = { point: pt.point, tri: pt.tri };
     refreshTextBaseline();
-    setStatus('Curved text placed — adjust Rotation, click again to move it, or "Apply curved text".');
-    return;
-  }
-  if (tool === 'line') {
+    setStatus('Curved text placed — adjust Rotation, tap again to move it, or "Apply curved text".');
+  } else {
     lineRedo = []; // a fresh point starts a new branch
-    linePoints.push({ point: hit.point.clone(), tri: hit.faceIndex });
+    linePoints.push({ point: pt.point, tri: pt.tri });
     rebuildLinePath();
     refreshLinePreview();
     setStatus(`Line: ${linePoints.length} point(s). Commit with "Paint line" or "Block line".`);
+  }
+}
+
+/** Abandon an in-progress paint stroke without recording it (e.g. a second
+ *  finger arrived and we're handing off to the orbit gesture). */
+function cancelActivePaint() {
+  if (dragMode === 'scrub') painter.endScrubFill();
+  if (painter._strokeChanges) painter.cancelStroke();
+  dragMode = null;
+  strokePath = [];
+}
+
+canvas.addEventListener('pointerdown', (e) => {
+  activePointers.add(e.pointerId);
+  if (activePointers.size >= 2) {
+    // second finger: hand off to two-finger orbit/zoom, drop any paint/tap
+    gesture = true;
+    cancelActivePaint();
+    pendingTap = null;
+    viewer.updateBrushCursor(null);
+    return;
+  }
+  if (e.button !== 0 || !painter.mesh || refining) return;
+  const hit = viewer.pick(e);
+  if (!hit) return;
+  // tap tools (line / curved-text placement) commit on release, so a two-finger
+  // orbit that starts one finger first doesn't drop a stray point
+  if (textPlacing) {
+    pendingTap = { kind: 'text', point: hit.point.clone(), tri: hit.faceIndex };
+    return;
+  }
+  if (tool === 'line') {
+    pendingTap = { kind: 'line', point: hit.point.clone(), tri: hit.faceIndex };
     return;
   }
   try { canvas.setPointerCapture(e.pointerId); } catch { /* synthetic events have no valid pointerId */ }
   const through = document.getElementById('brush-through').checked;
+  const r = effRadius(e);
   painter.beginStroke();
   if (tool === 'brush') {
     dragMode = 'brush';
     strokePath = [hit.point.clone()];
     strokeErase = e.altKey;
-    painter.brush(hit.point, brushRadius, hit.faceIndex, through, e.altKey ? 0 : painter.activeGroup);
+    painter.brush(hit.point, r, hit.faceIndex, through, e.altKey ? 0 : painter.activeGroup);
   } else if (tool === 'blocker') {
     dragMode = 'blocker';
     strokePath = [hit.point.clone()];
     strokeErase = e.altKey;
-    painter.blockerBrush(hit.point, brushRadius, hit.faceIndex, e.altKey, through);
+    painter.blockerBrush(hit.point, r, hit.faceIndex, e.altKey, through);
   } else if (tool === 'fill') {
     if (painter.startScrubFill(hit.faceIndex)) {
       dragMode = 'scrub';
@@ -1411,6 +1452,7 @@ canvas.addEventListener('pointerdown', (e) => {
 });
 
 canvas.addEventListener('pointermove', (e) => {
+  if (gesture) { viewer.updateBrushCursor(null); return; } // two-finger orbit/zoom
   if (dragMode === 'scrub') {
     scrubLimit = Math.max(0, Math.min(360, fillAngle + (e.clientX - scrubStartX) * 0.25));
     const n = painter.scrubTo(scrubLimit);
@@ -1419,19 +1461,24 @@ canvas.addEventListener('pointermove', (e) => {
   }
   const hit = viewer.pick(e);
   const showCursor = tool === 'brush' || tool === 'blocker';
+  const r = effRadius(e);
   const cursorColor = e.altKey ? 0xff6060 : (tool === 'blocker' ? 0xc060ff : 0xffffff);
-  viewer.updateBrushCursor(showCursor ? hit : null, brushRadius, cursorColor);
+  viewer.updateBrushCursor(showCursor ? hit : null, r, cursorColor);
   if (!hit) return;
   const through = document.getElementById('brush-through').checked;
   if (dragMode === 'brush' || dragMode === 'blocker') {
     const last = strokePath[strokePath.length - 1];
     if (!last || last.distanceTo(hit.point) > brushRadius * 0.4) strokePath.push(hit.point.clone());
   }
-  if (dragMode === 'brush') painter.brush(hit.point, brushRadius, hit.faceIndex, through, e.altKey ? 0 : painter.activeGroup);
-  else if (dragMode === 'blocker') painter.blockerBrush(hit.point, brushRadius, hit.faceIndex, e.altKey, through);
+  if (dragMode === 'brush') painter.brush(hit.point, r, hit.faceIndex, through, e.altKey ? 0 : painter.activeGroup);
+  else if (dragMode === 'blocker') painter.blockerBrush(hit.point, r, hit.faceIndex, e.altKey, through);
 });
 
-window.addEventListener('pointerup', async () => {
+window.addEventListener('pointerup', async (e) => {
+  activePointers.delete(e.pointerId);
+  if (activePointers.size === 0) gesture = false;
+  // commit a deferred line/text tap (cleared already if a 2nd finger arrived)
+  if (pendingTap && !dragMode) { placeTapPoint(pendingTap); pendingTap = null; }
   if (!dragMode) return;
   const mode = dragMode;
   dragMode = null;
@@ -1465,6 +1512,15 @@ window.addEventListener('pointerup', async () => {
     refining = false;
     strokePath = [];
   }
+});
+
+// a cancelled pointer (browser took over the gesture) must not leave a stuck
+// half-stroke or a stale pointer in the set
+window.addEventListener('pointercancel', (e) => {
+  activePointers.delete(e.pointerId);
+  if (activePointers.size === 0) gesture = false;
+  pendingTap = null;
+  cancelActivePaint();
 });
 
 // ---- group panel ----
