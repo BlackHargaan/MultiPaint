@@ -28,6 +28,9 @@ export class Viewer {
       MIDDLE: THREE.MOUSE.ROTATE,
       RIGHT: THREE.MOUSE.PAN,
     };
+    // touch: one finger / stylus is reserved for painting, two fingers orbit
+    // (drag) and zoom (pinch). Main handles the one-finger vs. gesture arbitration.
+    this.controls.touches = { ONE: null, TWO: THREE.TOUCH.DOLLY_ROTATE };
 
     const hemi = new THREE.HemisphereLight(0xffffff, 0x445566, 1.2);
     this.scene.add(hemi);
