@@ -294,6 +294,7 @@ async function loadFile(file, { append = false } = {}) {
 function renderObjectList() {
   const el = document.getElementById('object-list');
   if (!el) return;
+  document.getElementById('app').classList.toggle('has-model', objects.length > 0);
   el.innerHTML = '';
   for (const o of objects) {
     const painted = o.triGroup.reduce((s, g) => s + (g > 0 ? 1 : 0), 0);
