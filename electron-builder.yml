@@ -1,0 +1,50 @@
+# electron-builder configuration — packages the desktop installers and wires
+# the auto-updater feed to this repo's GitHub Releases.
+appId: com.multipaint.app
+productName: MultiPaint
+copyright: Copyright © MultiPaint
+
+directories:
+  output: release
+  buildResources: build
+
+# Only the built web bundle, the Electron entry points, and package.json ship
+# inside the app. (node_modules the app actually needs are included automatically.)
+files:
+  - dist/**/*
+  - electron/**/*
+  - package.json
+
+# electron-updater reads releases from here. The in-app "Check for updates"
+# button downloads and installs the newest published release for this repo.
+publish:
+  provider: github
+  owner: BlackHargaan
+  repo: MultiPaint
+  releaseType: draft
+
+win:
+  target:
+    - nsis
+  icon: build/icon.png
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  deleteAppDataOnUninstall: false
+
+mac:
+  target:
+    - dmg
+    - zip
+  category: public.app-category.graphics-design
+  icon: build/icon.png
+
+linux:
+  target:
+    - AppImage
+    - deb
+  category: Graphics
+  icon: build/icon.png
+  synopsis: Paint STL/3MF models for multicolor 3D printing

@@ -2051,6 +2051,61 @@ window.addEventListener('appinstalled', () => {
   setStatus('MultiPaint installed — it now works offline and opens in its own window.');
 });
 
+// ---- desktop (Electron) auto-update ----
+
+if (window.desktop && window.desktop.isElectron) {
+  const updateBtn = document.getElementById('btn-update');
+  let downloaded = false;
+  updateBtn.hidden = false;
+
+  window.desktop.getVersion().then((v) => {
+    updateBtn.title = `MultiPaint ${v} — check GitHub for a newer release`;
+  }).catch(() => {});
+
+  window.desktop.onUpdateStatus((s) => {
+    switch (s.state) {
+      case 'checking':
+        updateBtn.disabled = true;
+        updateBtn.textContent = '⟳ Checking…';
+        break;
+      case 'available':
+        updateBtn.disabled = true;
+        updateBtn.textContent = `⤓ Downloading v${s.version}…`;
+        setStatus(`Update available (v${s.version}) — downloading…`);
+        break;
+      case 'downloading':
+        updateBtn.disabled = true;
+        updateBtn.textContent = `⤓ Downloading… ${s.percent}%`;
+        break;
+      case 'downloaded':
+        downloaded = true;
+        updateBtn.disabled = false;
+        updateBtn.classList.add('btn-primary');
+        updateBtn.textContent = `✓ Restart to update (v${s.version})`;
+        updateBtn.title = 'Restart MultiPaint to finish installing the update';
+        setStatus(`Update v${s.version} downloaded — click “Restart to update”.`);
+        break;
+      case 'none':
+        updateBtn.disabled = false;
+        updateBtn.textContent = '✓ Up to date';
+        setStatus('MultiPaint is up to date.');
+        setTimeout(() => { if (!downloaded) updateBtn.textContent = '⟳ Check for updates'; }, 3000);
+        break;
+      case 'error':
+        updateBtn.disabled = false;
+        updateBtn.textContent = '⟳ Check for updates';
+        setStatus(`Update check failed: ${s.message}`);
+        break;
+    }
+  });
+
+  updateBtn.addEventListener('click', async () => {
+    if (downloaded) { window.desktop.installUpdate(); return; }
+    const r = await window.desktop.checkForUpdates();
+    if (!r.ok && r.reason) setStatus(`Update check unavailable (${r.reason}).`);
+  });
+}
+
 // debug hook for tests
 window.__mp.objects = () => objects;
 window.__mp.activeId = () => activeId;

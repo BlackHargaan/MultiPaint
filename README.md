@@ -34,6 +34,52 @@ with your project intact. (The large sample STLs are deliberately not cached.)
 npm run build && npm run preview
 ```
 
+## Desktop app (Windows / macOS / Linux)
+
+MultiPaint also ships as a native desktop app (Electron), so you can run it
+without a browser and it updates itself.
+
+**Download:** grab the installer for your OS from the
+[Releases page](https://github.com/BlackHargaan/MultiPaint/releases) — `.exe`
+(Windows), `.dmg` (macOS), or `.AppImage` / `.deb` (Linux).
+
+**Updating:** the top bar has a **⟳ Check for updates** button. It checks the
+latest GitHub Release, downloads it in the background (showing progress), and
+turns into **✓ Restart to update** when ready — one click installs it and
+relaunches. It also checks quietly on startup, so you'll usually just see the
+restart prompt when a new version is out. Your projects (IndexedDB autosave),
+palette and saved setups carry across updates untouched.
+
+### Building the desktop app yourself
+
+```sh
+npm run electron:dev   # run the desktop app against the dev server
+                       #   (start `npm run dev` in another terminal first)
+npm run dist           # build an installer for your current OS into release/
+```
+
+The web bundle is served inside the app over a private `app://` origin (not
+`file://`), so IndexedDB, localStorage and the mesh Web Worker behave exactly
+as they do in the browser; the PWA service worker is dropped from this build
+since the app updates through GitHub Releases instead.
+
+### Cutting a release (all three OSes)
+
+Installers are built by CI (`.github/workflows/release.yml`) so each OS is
+packaged on its own runner:
+
+1. Bump `version` in `package.json` and commit.
+2. Tag it and push: `git tag v1.2.3 && git push origin v1.2.3`.
+3. The workflow builds Windows, macOS and Linux installers and uploads them to a
+   **draft** GitHub Release.
+4. Review the draft and click **Publish release** — every installed app's
+   **Check for updates** button now offers it.
+
+Notes: the version tag must match `package.json`'s `version`. Windows (NSIS) and
+Linux (AppImage) auto-update out of the box; **macOS auto-update needs the app
+to be code-signed** with an Apple Developer certificate — without signing, Mac
+users update by downloading the new `.dmg`.
+
 ## Controls
 
 | Input | Action |
@@ -321,3 +367,8 @@ land where they belong on the plate. Unpainted (Base) faces print on slot 1.
 - `src/export3mf.js` — multi-object painted 3MF writer (no Three.js dependency)
 - `src/projectio.js` — project persistence (IndexedDB autosave + `.mpaint` files)
 - `src/main.js` — UI wiring and the object shelf (activate/snapshot/split)
+- `electron/main.cjs` + `electron/preload.cjs` — desktop shell: serves the
+  built app over a secure `app://` origin and bridges the GitHub-Releases
+  auto-updater (electron-updater) to the in-app Check-for-updates button
+- `electron-builder.yml` + `.github/workflows/release.yml` — package the
+  Windows / macOS / Linux installers and publish them on a version tag

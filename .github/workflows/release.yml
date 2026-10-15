@@ -1,0 +1,40 @@
+name: Release desktop apps
+
+# Push a version tag (e.g. v1.0.0) to build installers for Windows, macOS and
+# Linux and upload them to a GitHub Release. electron-builder creates the release
+# as a DRAFT — review it and click "Publish release", and every installed app's
+# "Check for updates" button will then offer it.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build web bundle (Electron target)
+        run: npm run build:electron
+
+      - name: Build and publish installers
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx --no-install electron-builder --publish always
