@@ -1,0 +1,34 @@
+name: Publish release
+
+# The build workflow uploads installers to a DRAFT release so you can review it.
+# Run this (Actions tab → Publish release → Run workflow) to flip that draft to
+# a published release — that's when installed apps' "Check for updates" button
+# starts offering it. Uses the built-in token, which can edit releases.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag of the draft release to publish (e.g. v1.0.0)
+        required: true
+        default: v1.0.0
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish the draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          id=$(gh api "repos/$REPO/releases" --paginate \
+                --jq ".[] | select(.tag_name==\"$TAG\") | .id" | head -n1)
+          if [ -z "$id" ]; then
+            echo "No release found for tag $TAG"; exit 1
+          fi
+          gh api -X PATCH "repos/$REPO/releases/$id" -F draft=false -F make_latest=true
+          echo "Published $TAG (release id $id)"
