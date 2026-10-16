@@ -46,5 +46,8 @@ linux:
     - AppImage
     - deb
   category: Graphics
+  # Required by the .deb packager (Debian needs a maintainer); change to your
+  # own "Name <email>" if you like.
+  maintainer: MultiPaint <noreply@multipaint.app>
   icon: build/icon.png
   synopsis: Paint STL/3MF models for multicolor 3D printing
