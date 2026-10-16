@@ -1,12 +1,18 @@
 import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
+// ELECTRON=1 builds the bundle that ships inside the desktop app. There we
+// serve over a custom app:// scheme and update through electron-updater, so the
+// PWA service worker is both unnecessary and a second update mechanism we don't
+// want — drop it from that build.
+const electron = !!process.env.ELECTRON;
+
 // PORT is set by tooling (e.g. preview launchers); default stays 5173
 export default defineConfig({
   server: {
     port: Number(process.env.PORT) || 5173,
   },
-  plugins: [
+  plugins: electron ? [] : [
     VitePWA({
       registerType: 'autoUpdate',
       injectRegister: 'auto',
