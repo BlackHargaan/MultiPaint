@@ -271,6 +271,26 @@ coarse/lathe meshes (like the decal Detail; above Off it rebuilds geometry and
 clears undo). Esc or **Cancel** aborts. Thin-stroke text wants Finest/Ultra;
 raise Height if letters come out chunky.
 
+**Embossed text (raised / engraved geometry):** everything above *paints* the
+surface; **Emboss** makes the text **real 3D geometry** instead. Set **Emboss**
+to **Raised** or **Engraved**, pick a **Depth (mm)** (default 0.6), type your
+text and font, click **Place raised/engraved text…**, click **once** on the
+model to place it (same level-baseline wrap as curved text — each glyph in its
+own surface frame, so it sits right on cones and cylinders), then **Apply**.
+Raised adds the letters standing proud of the surface; Engraved cuts them in —
+and either way the new faces are painted the active filament, so the emboss
+prints as its own color. This is the geometry-level version of Orca's emboss:
+the letters are built as solids (from the same glyph outlines the decal uses)
+and fused to the model with a watertight boolean (the
+[manifold](https://github.com/elalish/manifold) engine), so the result stays
+printable. Before the boolean the model is auto-repaired — welded, open holes
+filled, inside-out normals flipped — so even imperfect STLs (lathe/revolve
+meshes with an open bottom, or flipped shells) work; a genuinely non-manifold
+model may still be refused. The heavy boolean runs in a background worker so the
+UI doesn't freeze. Like Detail/subdivision, embossing rebuilds the mesh and
+clears undo history; the added/cut geometry exports in the 3MF like any other
+geometry, painted per-triangle.
+
 **Snapshot round-trip (for AI-editing an exact view, WIP):**
 
 1. Frame the model, then **Save view snapshot** — downloads a PNG and freezes
@@ -363,6 +383,10 @@ land where they belong on the plate. Unpainted (Base) faces print on slot 1.
 - `src/meshcache.js` + `src/meshcache.worker.js` — build those caches in a Web
   Worker for big meshes (import and post-subdivision rebuild) so the UI doesn't
   freeze; synchronous fallback for small meshes / non-worker environments
+- `src/emboss.js` + `src/emboss-core.js` + `src/emboss.worker.js` +
+  `src/masktrace.js` — raised/engraved text geometry: trace glyph masks to
+  polygons, repair the model (weld + hole-fill + orient), then run a watertight
+  manifold-3d boolean in a Web Worker and paint the new faces the active group
 - `src/import3mf.js` — multi-object 3MF reader (paint + settings)
 - `src/export3mf.js` — multi-object painted 3MF writer (no Three.js dependency)
 - `src/projectio.js` — project persistence (IndexedDB autosave + `.mpaint` files)
