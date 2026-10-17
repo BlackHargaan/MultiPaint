@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { refineMesh } from './subdivide.js';
-import { cutAlongField } from './contour.js';
+import { refineAndCutRegion } from './contour.js';
 import { buildMeshCachesFromPositions } from './meshcore.js';
 import { buildMeshCachesAsync } from './meshcache.js';
 
@@ -311,14 +311,13 @@ export class Painter {
       const bb = this.mesh.geometry.boundingBox;
       const diag = bb.min.distanceTo(bb.max);
       const minEdgeVal = minEdge ?? Math.max(0.15, diag * 0.003);
-      const prog = (base, span) => (f, phase) => onProgress?.(base + span * Math.min(1, f), phase);
-      const refined = await refineMesh(
-        this.mesh.geometry.attributes.position.array,
-        this.triGroup, this.blocked, (x, y, z, nx, ny, nz) => field(x, y, z, nx, ny, nz).label,
-        { maxRounds: subdivide + 3, minEdge: minEdgeVal, inScope, triInScope, maxEdge, onProgress: prog(0, 0.6) }
+      // only the triangles near the glyphs are rebuilt; the rest stay as-is
+      const scope = triInScope || ((pos, o) => true);
+      const cut = await refineAndCutRegion(
+        this.mesh.geometry.attributes.position.array, this.triGroup, this.blocked,
+        { field, regionScope: scope, cutScope: scope, refineScope: scope,
+          maxRounds: subdivide + 3, minEdge: minEdgeVal, maxEdge, onProgress }
       );
-      const cut = await cutAlongField(refined.positions, refined.triGroup, refined.blocked, field,
-        { triInScope, onProgress: prog(0.6, 0.4) });
       await this.adoptRefined(cut.positions, cut.triGroup, cut.blocked);
       let applied = 0;
       for (let t = 0; t < this.triCount; t++) {
