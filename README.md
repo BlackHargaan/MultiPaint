@@ -248,7 +248,7 @@ list), optionally Bold/Italic, then choose an **Effect** and a **Placement**:
 
 | Effect | What it makes |
 |---|---|
-| **Paint** | Flat color on the surface, in the active filament (Detail sets edge crispness) |
+| **Paint** | Flat color on the surface, in the active filament. Detail above Off cuts the mesh exactly along each letter's outline for smooth edges |
 | **Raised** | Real 3D letters standing proud of the surface (Depth in mm), painted the active filament |
 | **Engraved** | Letters cut into the surface (Depth in mm), painted the active filament |
 
@@ -291,20 +291,23 @@ Two ways to paint in 2D and apply in 3D (**Image** on the rail):
    not occluded, checked by raycast) samples its pixel, snaps to the nearest
    filament color, and gets assigned. Transparent PNG pixels are skipped, so
    logo decals with alpha land exactly as cut. One undoable stroke.
-3. **Detail** — with subdivision on (default: 3 rounds), triangles that
-   straddle the decal's color boundaries are split before painting, so edges
-   come out crisp even on coarse meshes (a plain cube face gets a round
-   circle, not two half-face blobs). **Ultra (5 rounds)** targets small text:
-   the pre-cut size and the refinement floor both scale with the Detail
-   level, so letter strokes can't slip between sample points — expect it to
-   take noticeably longer than the other levels. Refinement is two-phase: oversized
-   triangles overlapping the decal are first cut down to decal scale — so
-   lathe/revolve topology (full-height sliver triangles around a cylinder,
-   e.g. cups and coolers) works without remeshing — then color boundaries
-   are refined. Uses conforming red-green refinement —
-   neighbors stay stitched, no T-junctions, the mesh stays watertight for
-   export. Note: subdividing rebuilds the mesh and clears the undo history;
-   set Detail to "Off" for a normal undoable apply.
+3. **Detail** — above Off, the mesh is **cut exactly along the decal's color
+   outlines**. Each color region of the image gets a distance field (how far
+   every pixel is from the nearest edge); every mesh vertex samples it, and
+   wherever an edge's two ends land in different colors a vertex is inserted
+   right where the outline crosses it and the triangles are split there. So
+   painted edges follow the image's real shapes with sub-triangle precision —
+   smooth curves and straight lines, no sawtooth of slivers — even on coarse
+   or irregular organic meshes. Triangles near the outline are refined first
+   (**Smooth / Smoother / Smoothest / Ultra** set how closely the cut follows
+   tight curves: finer levels use shorter segments and more triangles;
+   **Ultra** is for tiny or thin text), and huge lathe/revolve slivers (cups,
+   coolers) are cut down to decal scale before that, so small decals can't
+   slip between their corners. Cut points are shared by neighboring
+   triangles, so the mesh stays watertight for export. Note: this rebuilds the
+   mesh and clears the undo history; set Detail to **Off** for an undoable
+   apply that paints whole triangles (fine on dense meshes, jagged on coarse
+   ones).
 
 **Snapshot round-trip (for AI-editing an exact view, WIP):**
 
@@ -394,6 +397,8 @@ land where they belong on the plate. Unpainted (Base) faces print on slot 1.
   mirror, printability report / auto-fix, mesh-cache/connected-component
   helpers for the shelf
 - `src/filaments.js` — curated real-world filament catalog for the library picker
+- `src/contour.js` — distance fields and exact contour cutting (smooth,
+  watertight decal/text edges)
 - `src/meshcore.js` — pure per-triangle caches (adjacency, normals, centroids)
   and `orientShells` (inside-out / mixed-winding repair on import)
 - `src/meshcache.js` + `src/meshcache.worker.js` — build those caches in a Web
