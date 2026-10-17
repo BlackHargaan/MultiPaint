@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { refineMesh } from './subdivide.js';
-import { cutAlongField, labelDistance, padLabels, majorityFilter, makeLabelSampler } from './contour.js';
+import { labelDistance, padLabels, majorityFilter, makeLabelSampler, outlineTiles, refineAndCutRegion } from './contour.js';
 
 // ray length used for parallel (orthographic) occlusion rays, mm
 const ORTHO_RAY = 2000;
@@ -394,34 +394,25 @@ export class ProjectionSession {
     const sin = Math.sin(ov.rotDeg * Math.PI / 180);
     const v = new THREE.Vector3();
     const far = { label: -1, dist: 1e6 };
-    // vertex → screen → overlay-local → decal pixel → region + boundary distance
-    const field = (x, y, z) => {
+    const ip = [0, 0];
+    /** world point → decal pixel coords (padded image); false if behind the camera */
+    const toImg = (x, y, z) => {
       const p = v.set(x, y, z).project(camera);
-      if (p.z > 1) return far;
       const sx = (p.x + 1) / 2 * rect.width, sy = (1 - p.y) / 2 * rect.height;
       const dx = sx - ov.cx, dy = sy - ov.cy;
-      const lx = dx * cos + dy * sin + ov.w / 2;
-      const ly = -dx * sin + dy * cos + ov.h / 2;
-      return sample(lx / ov.w * lm.w + 1, ly / ov.h * lm.h + 1);
+      ip[0] = (dx * cos + dy * sin + ov.w / 2) / ov.w * lm.w + 1;
+      ip[1] = (-dx * sin + dy * cos + ov.h / 2) / ov.h * lm.h + 1;
+      return p.z <= 1;
     };
-    const classify = (x, y, z) => field(x, y, z).label;
+    // vertex → decal pixel → region + boundary distance
+    const field = (x, y, z) => (toImg(x, y, z) ? sample(ip[0], ip[1]) : far);
 
-    // only triangles under the overlay and not facing away get refined/cut
-    const rMax = Math.hypot(ov.w, ov.h) / 2;
+    // scopes: work only where the decal has something to say
+    const tiles = outlineTiles(lm.labels, lm.dist, lm.pw, lm.ph);
     const camPos = camera.position;
     const fwd = camera.getWorldDirection(new THREE.Vector3());
     const isOrtho = !camera.isPerspectiveCamera;
-    const triInScope = (pos, o) => {
-      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, front = false;
-      for (let k = 0; k < 3; k++) {
-        v.set(pos[o + k * 3], pos[o + k * 3 + 1], pos[o + k * 3 + 2]).project(camera);
-        if (v.z <= 1) front = true;
-        const sx = (v.x + 1) / 2 * rect.width, sy = (1 - v.y) / 2 * rect.height;
-        if (sx < minX) minX = sx; if (sx > maxX) maxX = sx;
-        if (sy < minY) minY = sy; if (sy > maxY) maxY = sy;
-      }
-      if (!front) return false;
-      if (maxX < ov.cx - rMax || minX > ov.cx + rMax || maxY < ov.cy - rMax || minY > ov.cy + rMax) return false;
+    const facing = (pos, o) => {
       // skip clearly back-facing triangles (the far side never shows the decal)
       const ux = pos[o + 3] - pos[o], uy = pos[o + 4] - pos[o + 1], uz = pos[o + 5] - pos[o + 2];
       const wx = pos[o + 6] - pos[o], wy = pos[o + 7] - pos[o + 1], wz = pos[o + 8] - pos[o + 2];
@@ -430,6 +421,45 @@ export class ProjectionSession {
       if (isOrtho) { dx = fwd.x; dy = fwd.y; dz = fwd.z; }
       else { dx = pos[o] - camPos.x; dy = pos[o + 1] - camPos.y; dz = pos[o + 2] - camPos.z; }
       return nx * dx + ny * dy + nz * dz < 0.3 * Math.hypot(nx, ny, nz) * Math.hypot(dx, dy, dz);
+    };
+    /** triangle's decal-pixel bbox passes `test` (outline / content tiles) */
+    const scopeWith = (test) => (pos, o) => {
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, front = false;
+      for (let k = 0; k < 3; k++) {
+        if (toImg(pos[o + k * 3], pos[o + k * 3 + 1], pos[o + k * 3 + 2])) front = true;
+        if (ip[0] < x0) x0 = ip[0]; if (ip[0] > x1) x1 = ip[0];
+        if (ip[1] < y0) y0 = ip[1]; if (ip[1] > y1) y1 = ip[1];
+      }
+      return front && test(x0, y0, x1, y1) && facing(pos, o);
+    };
+    const cutScope = scopeWith(tiles.content);   // the decal lands here
+    const refineScope = scopeWith(tiles.edge);   // an outline passes here
+    // which original triangles to rebuild: under the decal AND visible — the
+    // decal projects straight through the model, and hidden surfaces behind
+    // (interiors, far walls) must not be refined along every outline
+    const raycaster = new THREE.Raycaster();
+    raycaster.firstHitOnly = true;
+    const dir = new THREE.Vector3(), origin = new THREE.Vector3(), q = new THREE.Vector3();
+    const seen = (x, y, z) => {
+      q.set(x, y, z);
+      let d;
+      if (isOrtho) { dir.copy(fwd); d = ORTHO_RAY; origin.copy(q).addScaledVector(fwd, -ORTHO_RAY); }
+      else { dir.copy(q).sub(camPos); d = dir.length(); dir.divideScalar(d); origin.copy(camPos); }
+      raycaster.set(origin, dir);
+      const hits = raycaster.intersectObject(painter.mesh, false);
+      return !hits.length || hits[0].distance >= d - Math.max(0.05, isOrtho ? 0.1 : d * 0.002);
+    };
+    const regionScope = (pos, o) => {
+      if (!cutScope(pos, o)) return false;
+      const cx = (pos[o] + pos[o + 3] + pos[o + 6]) / 3;
+      const cy = (pos[o + 1] + pos[o + 4] + pos[o + 7]) / 3;
+      const cz = (pos[o + 2] + pos[o + 5] + pos[o + 8]) / 3;
+      if (seen(cx, cy, cz)) return true;
+      // partly hidden triangles: try points near each corner
+      for (let k = 0; k < 3; k++) {
+        if (seen(pos[o + k * 3] * 0.8 + cx * 0.2, pos[o + k * 3 + 1] * 0.8 + cy * 0.2, pos[o + k * 3 + 2] * 0.8 + cz * 0.2)) return true;
+      }
+      return false;
     };
 
     // refinement scale: Detail sets the outline segment length in decal pixels
@@ -444,19 +474,14 @@ export class ProjectionSession {
     const minEdge = Math.max(diag * 0.0008, detailTargetPx(detail) * worldPerImgPx);
     const maxEdge = Math.max(minEdge * 2, (Math.min(ov.w, ov.h) * worldPerPx) / (2 * detail));
 
-    const refined = await refineMesh(
-      painter.mesh.geometry.attributes.position.array, painter.triGroup, painter.blocked, classify,
-      { maxRounds: detail + 3, minEdge, maxEdge, triInScope, onProgress: progress(0, 0.5) }
+    const cut = await refineAndCutRegion(
+      painter.mesh.geometry.attributes.position.array, painter.triGroup, painter.blocked,
+      { field, regionScope, cutScope, refineScope, maxRounds: detail + 3, minEdge, maxEdge, onProgress: progress(0, 0.75) }
     );
-    const cut = await cutAlongField(refined.positions, refined.triGroup, refined.blocked, field,
-      { triInScope, onProgress: progress(0.5, 0.25) });
     await painter.adoptRefined(cut.positions, cut.triGroup, cut.blocked);
 
     // paint each piece with its region — only where the camera actually sees it
-    const raycaster = new THREE.Raycaster();
-    raycaster.firstHitOnly = true;
     const cen = painter.triCentroids, nor = painter.triNormals;
-    const dir = new THREE.Vector3(), origin = new THREE.Vector3();
     const counts = { applied: 0, outside: 0, transparent: 0, noMatch: 0, hidden: 0, created };
     for (let t = 0; t < painter.triCount; t++) {
       if ((t & 0x7fff) === 0 && t > 0) {

@@ -303,8 +303,12 @@ Two ways to paint in 2D and apply in 3D (**Image** on the rail):
    tight curves: finer levels use shorter segments and more triangles;
    **Ultra** is for tiny or thin text), and huge lathe/revolve slivers (cups,
    coolers) are cut down to decal scale before that, so small decals can't
-   slip between their corners. Cut points are shared by neighboring
-   triangles, so the mesh stays watertight for export. Note: this rebuilds the
+   slip between their corners. Refinement bisects each triangle's longest
+   edge (so long CAD slivers don't multiply) and runs only on the part of the
+   mesh that's under the decal **and visible** from the camera — the rest of
+   the model is left exactly as it was, so big models stay fast (a text decal
+   on a 225k-triangle Benchy takes seconds, not minutes). Cut points are
+   shared by neighboring triangles, so the mesh stays watertight for export. Note: this rebuilds the
    mesh and clears the undo history; set Detail to **Off** for an undoable
    apply that paints whole triangles (fine on dense meshes, jagged on coarse
    ones).

@@ -1,3 +1,5 @@
+import { refineMesh } from './subdivide.js';
+
 /**
  * Contour cutting — split the mesh exactly along the boundaries of a label
  * field instead of painting whole triangles.
@@ -170,6 +172,7 @@ const T_MIN = 0.03, T_MAX = 1 - T_MIN;
  *   the region boundary (any consistent unit). Evaluated once per welded
  *   vertex, with the normal of the first in-scope triangle that touches it.
  * opts.triInScope(pos, o) — which triangles to evaluate/cut (default: all).
+ * opts.frozen — Set of edge keys never to cut (region borders; see refineMesh).
  *
  * Returns { positions, triGroup, blocked, labels } where labels[t] is the
  * field region of each output triangle (-1 = untouched / out of scope);
@@ -229,8 +232,14 @@ export async function cutAlongField(positions, triGroup, blocked, field, opts = 
 
   // one cut point per edge whose ends lie in different regions
   const cuts = new Map();
+  const frozen = opts.frozen && opts.frozen.size ? opts.frozen : null;
+  const vKey = (id) => vPos[id * 3] + '_' + vPos[id * 3 + 1] + '_' + vPos[id * 3 + 2];
   const cutPoint = (a, b) => {
     if (vLabel[a] === NONE || vLabel[b] === NONE || vLabel[a] === vLabel[b]) return null;
+    if (frozen) {
+      const ka = vKey(a), kb = vKey(b);
+      if (frozen.has(ka < kb ? ka + '|' + kb : kb + '|' + ka)) return null;
+    }
     const lo = a < b ? a : b, hi = a < b ? b : a;
     const key = lo * nVerts + hi;
     let c = cuts.get(key);
@@ -266,10 +275,37 @@ export async function cutAlongField(positions, triGroup, blocked, field, opts = 
       outLabel.push(label);
     };
     const nCuts = (C[0] ? 1 : 0) + (C[1] ? 1 : 0) + (C[2] ? 1 : 0);
+    // split at whatever cut points the edges carry, all pieces one label
+    const splitPlain = (V, C, nCuts, label) => {
+      if (nCuts === 0) {
+        emit(V[0], V[1], V[2], label);
+      } else if (nCuts === 3) {
+        emit(V[0], C[0], C[2], label); emit(C[0], V[1], C[1], label);
+        emit(C[2], C[1], V[2], label); emit(C[0], C[1], C[2], label);
+      } else {
+        const r = C[0] ? 0 : C[1] ? 1 : 2; // first cut edge (V[r]–V[r+1])
+        const A = V[r], B = V[(r + 1) % 3], Cc = V[(r + 2) % 3];
+        const m = C[r];
+        if (nCuts === 1) {
+          emit(A, m, Cc, label); emit(m, B, Cc, label);
+        } else if (C[(r + 1) % 3]) {
+          const mBC = C[(r + 1) % 3];
+          emit(A, m, Cc, label); emit(m, mBC, Cc, label); emit(m, B, mBC, label);
+        } else {
+          const mCA = C[(r + 2) % 3];
+          emit(A, m, mCA, label); emit(m, B, mCA, label); emit(mCA, B, Cc, label);
+        }
+      }
+    };
 
     if (inScope[t]) {
       const L = [vLabel[id[0]], vLabel[id[1]], vLabel[id[2]]];
-      if (nCuts === 0) {
+      const regions = (L[0] !== L[1]) + (L[1] !== L[2]) + (L[2] !== L[0]);
+      if (nCuts !== regions) {
+        // a needed cut sits on a frozen border edge: split geometrically at the
+        // cuts that do exist (so neighbors stay stitched), one label for all
+        splitPlain(V, C, nCuts, L[1] === L[2] ? L[1] : L[0]);
+      } else if (nCuts === 0) {
         emit(V[0], V[1], V[2], L[0]);
       } else if (nCuts === 3) {
         // three regions meet: fan around the cut points' center
@@ -299,25 +335,7 @@ export async function cutAlongField(positions, triGroup, blocked, field, opts = 
 
     // out of scope but sharing a cut edge with a cut neighbor: split
     // geometrically at the same points (keeps the mesh stitched), no paint
-    if (nCuts === 0) {
-      emit(V[0], V[1], V[2], -1);
-    } else if (nCuts === 3) {
-      emit(V[0], C[0], C[2], -1); emit(C[0], V[1], C[1], -1);
-      emit(C[2], C[1], V[2], -1); emit(C[0], C[1], C[2], -1);
-    } else {
-      const r = C[0] ? 0 : C[1] ? 1 : 2; // first cut edge (V[r]–V[r+1])
-      const A = V[r], B = V[(r + 1) % 3], Cc = V[(r + 2) % 3];
-      const m = C[r];
-      if (nCuts === 1) {
-        emit(A, m, Cc, -1); emit(m, B, Cc, -1);
-      } else if (C[(r + 1) % 3]) {
-        const mBC = C[(r + 1) % 3];
-        emit(A, m, Cc, -1); emit(m, mBC, Cc, -1); emit(m, B, mBC, -1);
-      } else {
-        const mCA = C[(r + 2) % 3];
-        emit(A, m, mCA, -1); emit(m, B, mCA, -1); emit(mCA, B, Cc, -1);
-      }
-    }
+    splitPlain(V, C, nCuts, -1);
   }
 
   return {
@@ -327,4 +345,171 @@ export async function cutAlongField(positions, triGroup, blocked, field, opts = 
     labels: Int16Array.from(outLabel),
     cutEdges: cuts.size,
   };
+}
+
+// ---------- scoping: only work where there is actually an outline ----------
+
+/**
+ * Coarse tile grid over a (padded) label image for O(1) rectangle queries:
+ *   edge(x0, y0, x1, y1)    — does any outline pass through this pixel box?
+ *   content(x0, y0, x1, y1) — does it hold any outline or labelled (≠ -1) pixel?
+ * Refinement only needs triangles that straddle an outline; the cut also
+ * needs the ones lying fully inside a region (so they still get painted).
+ */
+export function outlineTiles(labels, dist, w, h, tile = 4) {
+  const tw = Math.ceil(w / tile), th = Math.ceil(h / tile);
+  const edge = new Int32Array((tw + 1) * (th + 1));
+  const cont = new Int32Array((tw + 1) * (th + 1));
+  for (let ty = 0; ty < th; ty++) {
+    for (let tx = 0; tx < tw; tx++) {
+      let e = 0, c = 0;
+      for (let y = ty * tile; y < Math.min(h, ty * tile + tile) && !e; y++) {
+        for (let x = tx * tile; x < Math.min(w, tx * tile + tile); x++) {
+          const i = y * w + x;
+          if (dist[i] < 1.5) { e = 1; c = 1; break; }
+          if (labels[i] !== -1) c = 1;
+        }
+      }
+      edge[(ty + 1) * (tw + 1) + tx + 1] = e;
+      cont[(ty + 1) * (tw + 1) + tx + 1] = c;
+    }
+  }
+  // summed-area tables
+  for (const a of [edge, cont]) {
+    for (let y = 1; y <= th; y++) {
+      for (let x = 1; x <= tw; x++) {
+        a[y * (tw + 1) + x] += a[(y - 1) * (tw + 1) + x] + a[y * (tw + 1) + x - 1] - a[(y - 1) * (tw + 1) + x - 1];
+      }
+    }
+  }
+  const query = (a, x0, y0, x1, y1) => {
+    const tx0 = Math.max(0, Math.floor(x0 / tile)), ty0 = Math.max(0, Math.floor(y0 / tile));
+    const tx1 = Math.min(tw - 1, Math.floor(x1 / tile)), ty1 = Math.min(th - 1, Math.floor(y1 / tile));
+    if (tx1 < tx0 || ty1 < ty0) return false;
+    const W1 = tw + 1;
+    return a[(ty1 + 1) * W1 + tx1 + 1] - a[ty0 * W1 + tx1 + 1] - a[(ty1 + 1) * W1 + tx0] + a[ty0 * W1 + tx0] > 0;
+  };
+  return {
+    edge: (x0, y0, x1, y1) => query(edge, x0, y0, x1, y1),
+    content: (x0, y0, x1, y1) => query(cont, x0, y0, x1, y1),
+  };
+}
+
+/**
+ * Refine and cut only the part of the mesh that can change.
+ *
+ * The region = triangles where cutScope says the decal/text might land, plus
+ * a one-triangle ring around them. Only the region goes through refinement
+ * and cutting; every edge on its border is frozen (never split, never cut),
+ * so the untouched rest of the mesh stays stitched to it — cost scales with
+ * the decal, not with the model. refineScope picks the (usually much
+ * smaller) set worth subdividing: triangles that straddle an outline.
+ *
+ * opts.regionScope(pos, o) — which ORIGINAL triangles to rebuild (default
+ *   cutScope); evaluated once per triangle, so it may be expensive.
+ * Returns { positions, triGroup, blocked, labels, regionTris } for the whole
+ * mesh (labels -1 outside the region).
+ */
+export async function refineAndCutRegion(positions, triGroup, blocked, opts) {
+  const { field, cutScope, refineScope, maxRounds, minEdge, maxEdge, onProgress, stats } = opts;
+  // regionScope picks the original triangles to rebuild (default: cutScope);
+  // callers pass a stricter one, e.g. with an occlusion test that's too costly
+  // to repeat for every refined triangle
+  const regionScope = opts.regionScope || cutScope;
+  const triCount = positions.length / 9;
+
+  // weld once so edges are compared by vertex identity — every triangle that
+  // uses an edge counts, including the 3rd+ faces on non-manifold edges
+  const vertId = new Int32Array(triCount * 3);
+  const seen = new Map();
+  let nV = 0;
+  for (let i = 0; i < triCount * 3; i++) {
+    if ((i & 0x7fff) === 0 && i > 0) await new Promise((r) => setTimeout(r, 0));
+    const key = positions[i * 3] + '_' + positions[i * 3 + 1] + '_' + positions[i * 3 + 2];
+    let id = seen.get(key);
+    if (id === undefined) { id = nV++; seen.set(key, id); }
+    vertId[i] = id;
+  }
+  const ek = (t, e) => {
+    const a = vertId[t * 3 + e], b = vertId[t * 3 + ((e + 1) % 3)];
+    return a < b ? a * nV + b : b * nV + a;
+  };
+
+  // region = scoped triangles + every triangle sharing an edge with one
+  const inRegion = new Uint8Array(triCount);
+  const scopedEdges = new Set();
+  for (let t = 0; t < triCount; t++) {
+    if ((t & 0x7fff) === 0 && t > 0) await new Promise((r) => setTimeout(r, 0));
+    if (!regionScope(positions, t * 9)) continue;
+    inRegion[t] = 2;
+    for (let e = 0; e < 3; e++) scopedEdges.add(ek(t, e));
+  }
+  if (!scopedEdges.size) {
+    return { positions, triGroup, blocked, labels: new Int16Array(triCount).fill(-1), regionTris: 0 };
+  }
+  for (let t = 0; t < triCount; t++) {
+    if (inRegion[t]) continue;
+    for (let e = 0; e < 3; e++) if (scopedEdges.has(ek(t, e))) { inRegion[t] = 1; break; }
+  }
+  // frozen = region edges also used by a triangle outside the region
+  const regionEdges = new Set();
+  let regionTris = 0;
+  for (let t = 0; t < triCount; t++) {
+    if (!inRegion[t]) continue;
+    regionTris++;
+    for (let e = 0; e < 3; e++) regionEdges.add(ek(t, e));
+  }
+  const frozen = new Set();
+  const posKey = (t, k) => {
+    const o = t * 9 + k * 3;
+    return positions[o] + '_' + positions[o + 1] + '_' + positions[o + 2];
+  };
+  for (let t = 0; t < triCount; t++) {
+    if (inRegion[t]) continue;
+    for (let e = 0; e < 3; e++) {
+      if (!regionEdges.has(ek(t, e))) continue;
+      const ka = posKey(t, e), kb = posKey(t, (e + 1) % 3);
+      frozen.add(ka < kb ? ka + '|' + kb : kb + '|' + ka);
+    }
+  }
+
+  const rPos = new Float32Array(regionTris * 9);
+  const rGroup = new Uint16Array(regionTris), rBlock = new Uint8Array(regionTris);
+  let k = 0;
+  for (let t = 0; t < triCount; t++) {
+    if (!inRegion[t]) continue;
+    rPos.set(positions.subarray(t * 9, t * 9 + 9), k * 9);
+    rGroup[k] = triGroup[t];
+    rBlock[k] = blocked[t];
+    k++;
+  }
+
+  const prog = (base, span) => (f, phase) => onProgress?.(base + span * Math.min(1, f), phase);
+  const classify = (x, y, z, nx, ny, nz) => field(x, y, z, nx, ny, nz).label;
+  const refined = await refineMesh(rPos, rGroup, rBlock, classify, {
+    maxRounds, minEdge, maxEdge, triInScope: refineScope, frozen, stats, onProgress: prog(0, 0.7),
+  });
+  const cut = await cutAlongField(refined.positions, refined.triGroup, refined.blocked, field, {
+    triInScope: cutScope, frozen, onProgress: prog(0.7, 0.3),
+  });
+
+  // reassemble: untouched triangles first, then the rebuilt region
+  const outside = triCount - regionTris;
+  const nOut = outside + cut.positions.length / 9;
+  const pos = new Float32Array(nOut * 9);
+  const grp = new Uint16Array(nOut), blk = new Uint8Array(nOut);
+  const labels = new Int16Array(nOut).fill(-1);
+  let j = 0;
+  for (let t = 0; t < triCount; t++) {
+    if (inRegion[t]) continue;
+    pos.set(positions.subarray(t * 9, t * 9 + 9), j * 9);
+    grp[j] = triGroup[t];
+    blk[j] = blocked[t];
+    j++;
+  }
+  pos.set(cut.positions, j * 9);
+  grp.set(cut.triGroup, j);
+  blk.set(cut.blocked, j);
+  labels.set(cut.labels, j);
+  return { positions: pos, triGroup: grp, blocked: blk, labels, regionTris };
 }

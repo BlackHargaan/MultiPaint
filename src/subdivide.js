@@ -1,5 +1,10 @@
 /**
- * Conforming (red-green) mesh refinement along decal/stroke boundaries.
+ * Conforming mesh refinement along decal/stroke boundaries, by longest-edge
+ * bisection: a marked triangle splits only its longest edge (neighbors
+ * sharing a split edge follow with 2/3/4-way splits, so the mesh stays
+ * stitched). Halving the longest edge each round keeps slivers from
+ * multiplying — a 4-way split of a long CAD sliver makes 4 slivers per round,
+ * bisection makes 2 progressively shorter ones.
  *
  * Two phases:
  *  1. Size normalization — triangles whose bounds overlap the target region
@@ -19,6 +24,10 @@
  * opts.triInScope(pos, o) — triangle-level overlap test (9 floats at offset o)
  *   used by phase 1; falls back to corner/centroid inScope tests.
  * opts.maxEdge — phase 1 target edge length (skip phase 1 if absent).
+ * opts.frozen — Set of edge keys ("x_y_z|x_y_z", the two vertices' coordinate
+ *   keys sorted) that must never be split: the border of an extracted region,
+ *   so the untouched rest of the mesh stays stitched.
+ * opts.stats — optional array; each round pushes { phase, round, marked, tris, ms }.
  */
 export async function refineMesh(positions, triGroup, blocked, classify, opts = {}) {
   const maxRounds = opts.maxRounds ?? 3;
@@ -32,21 +41,27 @@ export async function refineMesh(positions, triGroup, blocked, classify, opts = 
   // phase 1: cut oversized in-scope triangles down to decal scale, so point
   // sampling can detect a small decal crossing a huge triangle
   if (opts.maxEdge) {
-    for (let round = 0; round < 8; round++) {
+    for (let round = 0; round < 24; round++) {
+      const t0 = Date.now();
       const marked = await runRound(state, (pos, t) => {
         const o = t * 9;
         if (longestEdge(pos, o) <= opts.maxEdge) return 0;
-        return triangleInScope(pos, o, opts) ? 0b111 : 0;
+        if (isFlat(pos, o, minEdge * 0.05)) return 0;
+        return triangleInScope(pos, o, opts) ? longestEdgeBit(pos, o) : 0;
       }, opts, round, 'sizing');
+      opts.stats?.push({ phase: 'sizing', round, marked, tris: state.pos.length / 9, ms: Date.now() - t0 });
       if (!marked) break;
     }
   }
 
-  // phase 2: refine along classification boundaries
-  for (let round = 0; round < maxRounds; round++) {
+  // phase 2: refine along classification boundaries (bisection needs about
+  // twice the rounds of a 4-way split to shrink every edge)
+  for (let round = 0; round < maxRounds * 2; round++) {
+    const t1 = Date.now();
     const marked = await runRound(state, (pos, t, ctx) => {
       const o = t * 9;
       if (longestEdge(pos, o) < minEdge) return 0;
+      if (isFlat(pos, o, minEdge * 0.05)) return 0;
       if (!triangleInScope(pos, o, opts)) return 0;
       const n = triNormal(pos, o);
       const s0 = ctx.classifyVert(t * 3, n);
@@ -58,8 +73,9 @@ export async function refineMesh(positions, triGroup, blocked, classify, opts = 
         const cz = (pos[o + 2] + pos[o + 5] + pos[o + 8]) / 3;
         if (classify(cx, cy, cz, n[0], n[1], n[2]) === s0) return 0;
       }
-      return 0b111;
+      return longestEdgeBit(pos, o);
     }, opts, round, 'refining', classify);
+    opts.stats?.push({ phase: 'refining', round, marked, tris: state.pos.length / 9, ms: Date.now() - t1 });
     if (!marked) break;
   }
 
@@ -76,6 +92,35 @@ function longestEdge(pos, o) {
   const e1 = Math.hypot(pos[o + 6] - pos[o + 3], pos[o + 7] - pos[o + 4], pos[o + 8] - pos[o + 5]);
   const e2 = Math.hypot(pos[o] - pos[o + 6], pos[o + 1] - pos[o + 7], pos[o + 2] - pos[o + 8]);
   return Math.max(e0, e1, e2);
+}
+
+/**
+ * A flat "cap": its two short sides add up to (almost) the long one AND it is
+ * a tiny fraction of the refinement target thick, so it holds no visible
+ * area. Bisecting
+ * one just hands a new cap to its neighbor, so strips of them (common in CAD
+ * exports) would keep refinement going round after round — skip them. Long
+ * thin slivers that are still visibly thick (e.g. pieces of a bisected lathe
+ * column) keep being refined, or they'd leave unpainted strips.
+ */
+function isFlat(pos, o, hMin) {
+  const e0 = Math.hypot(pos[o + 3] - pos[o], pos[o + 4] - pos[o + 1], pos[o + 5] - pos[o + 2]);
+  const e1 = Math.hypot(pos[o + 6] - pos[o + 3], pos[o + 7] - pos[o + 4], pos[o + 8] - pos[o + 5]);
+  const e2 = Math.hypot(pos[o] - pos[o + 6], pos[o + 1] - pos[o + 7], pos[o + 2] - pos[o + 8]);
+  const L = Math.max(e0, e1, e2);
+  if (e0 + e1 + e2 - 2 * L >= 0.01 * L) return false;
+  const ux = pos[o + 3] - pos[o], uy = pos[o + 4] - pos[o + 1], uz = pos[o + 5] - pos[o + 2];
+  const wx = pos[o + 6] - pos[o], wy = pos[o + 7] - pos[o + 1], wz = pos[o + 8] - pos[o + 2];
+  const twiceArea = Math.hypot(uy * wz - uz * wy, uz * wx - ux * wz, ux * wy - uy * wx);
+  return twiceArea / L < hMin; // height over the long edge
+}
+
+/** Bit (1: v0–v1, 2: v1–v2, 4: v2–v0) of the triangle's longest edge. */
+function longestEdgeBit(pos, o) {
+  const e0 = (pos[o + 3] - pos[o]) ** 2 + (pos[o + 4] - pos[o + 1]) ** 2 + (pos[o + 5] - pos[o + 2]) ** 2;
+  const e1 = (pos[o + 6] - pos[o + 3]) ** 2 + (pos[o + 7] - pos[o + 4]) ** 2 + (pos[o + 8] - pos[o + 5]) ** 2;
+  const e2 = (pos[o] - pos[o + 6]) ** 2 + (pos[o + 1] - pos[o + 7]) ** 2 + (pos[o + 2] - pos[o + 8]) ** 2;
+  return e0 >= e1 && e0 >= e2 ? 1 : e1 >= e2 ? 2 : 4;
 }
 
 function triNormal(pos, o) {
@@ -110,6 +155,8 @@ async function runRound(state, shouldMark, opts, round, phase, classify) {
   // weld vertices for shared edge keys
   const vertId = new Int32Array(triCount * 3);
   const seen = new Map();
+  const frozen = opts.frozen && opts.frozen.size ? opts.frozen : null;
+  const keyOf = frozen ? [] : null; // welded id → coordinate key (frozen lookups)
   let nextId = 0;
   for (let i = 0; i < triCount * 3; i++) {
     if ((i & yieldEvery) === 0 && i > 0) {
@@ -118,10 +165,23 @@ async function runRound(state, shouldMark, opts, round, phase, classify) {
     }
     const key = pos[i * 3] + '_' + pos[i * 3 + 1] + '_' + pos[i * 3 + 2];
     let id = seen.get(key);
-    if (id === undefined) seen.set(key, (id = nextId++));
+    if (id === undefined) {
+      seen.set(key, (id = nextId++));
+      if (keyOf) keyOf.push(key);
+    }
     vertId[i] = id;
   }
   const edgeKey = (a, b) => (a < b ? a + '_' + b : b + '_' + a);
+  const isFrozen = (a, b) => {
+    if (!frozen) return false;
+    const ka = keyOf[a], kb = keyOf[b];
+    return frozen.has(ka < kb ? ka + '|' + kb : kb + '|' + ka);
+  };
+  const mark = (a, b) => {
+    if (isFrozen(a, b)) return false;
+    splitEdges.add(edgeKey(a, b));
+    return true;
+  };
 
   // per-welded-vertex classification cache for phase 2
   const memo = classify ? new Int32Array(nextId).fill(-2) : null;
@@ -147,10 +207,13 @@ async function runRound(state, shouldMark, opts, round, phase, classify) {
     }
     const bits = shouldMark(pos, t, ctx);
     if (!bits) continue;
-    markedCount++;
-    if (bits & 1) splitEdges.add(edgeKey(vertId[t * 3], vertId[t * 3 + 1]));
-    if (bits & 2) splitEdges.add(edgeKey(vertId[t * 3 + 1], vertId[t * 3 + 2]));
-    if (bits & 4) splitEdges.add(edgeKey(vertId[t * 3 + 2], vertId[t * 3]));
+    // count only triangles that actually split something (a frozen longest
+    // edge can't be split; counting it would keep the rounds going forever)
+    let any = false;
+    if (bits & 1) any = mark(vertId[t * 3], vertId[t * 3 + 1]) || any;
+    if (bits & 2) any = mark(vertId[t * 3 + 1], vertId[t * 3 + 2]) || any;
+    if (bits & 4) any = mark(vertId[t * 3 + 2], vertId[t * 3]) || any;
+    if (any) markedCount++;
   }
   if (!markedCount) return 0;
 
