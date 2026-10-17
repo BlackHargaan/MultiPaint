@@ -4,10 +4,10 @@ import { Viewer } from './viewer.js';
 import { Painter, connectedComponents } from './painter.js';
 import { buildMeshCachesAsync, orientShellsAsync } from './meshcache.js';
 import { exportProject3MF } from './export3mf.js';
-import { ProjectionSession, setDeshade } from './projection.js';
+import { ProjectionSession, setDeshade, detailTargetPx } from './projection.js';
 import { removeBackground } from './imagebg.js';
 import { parse3MF } from './import3mf.js';
-import { rasterizeGlyphs, buildPlacements, buildTextClassifier, buildLevelBaseline, glyphsTotalMm } from './curvedtext.js';
+import { rasterizeGlyphs, buildPlacements, buildTextClassifier, buildTextField, buildLevelBaseline, glyphsTotalMm } from './curvedtext.js';
 import { applyEmboss } from './emboss.js';
 import { idbSaveProject, idbLoadProject, idbClearProject, packProjectFile, unpackProjectFile } from './projectio.js';
 import { FILAMENTS, BRANDS, luminance } from './filaments.js';
@@ -1422,17 +1422,21 @@ document.getElementById('btn-text-apply').addEventListener('click', async () => 
   document.getElementById('btn-text-apply').disabled = true;
   setStatus('Applying curved text…');
   try {
+    // glyph pixels per mm: Detail sets the outline segment length in glyph px
+    const pxPerMm = layout.lineHpx / heightMm;
     const applied = await painter.applyRegionPaint(classify, {
       subdivide,
       inScope,
       triInScope,
+      field: buildTextField(placements, group, heightMm),
+      minEdge: Math.max(0.05, detailTargetPx(subdivide) / pxPerMm),
       // start phase-1 near the stroke width (~height/8), not the glyph height,
       // so thin crossbars survive the boundary refinement
       maxEdge: Math.max(0.6, heightMm * 0.22),
       onProgress: (f, phase) => setStatus(`Applying curved text — ${phase || ''} ${Math.round(f * 100)}%…`),
     });
     if (applied === 0) {
-      setStatus('Curved text landed nothing — try a larger Height or a Detail level of Fine+.');
+      setStatus('Curved text landed nothing — try a larger Height or a Detail level of Smooth or higher.');
     } else {
       setStatus(`Curved text applied: ${applied} triangles painted in "${painter.groups[group].name}"` +
         (subdivide
@@ -1520,7 +1524,7 @@ document.getElementById('btn-decal-apply').addEventListener('click', async () =>
       `${c.noMatch} no color match · ${c.hidden} hidden.` +
       (c.created > 0 ? ` Created ${c.created} color group(s) from the image.` : '') +
       (c.applied === 0 && !subdivide
-        ? ' Nothing landed — on coarse/lathe meshes set Detail to Fine or higher and re-apply.'
+        ? ' Nothing landed — on coarse/lathe meshes set Detail to Smooth or higher and re-apply.'
         : '') +
       (subdivide
         ? ` Mesh refined to ${painter.triCount.toLocaleString()} triangles (undo history cleared).`

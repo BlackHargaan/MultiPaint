@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { refineMesh } from './subdivide.js';
+import { cutAlongField, labelDistance, padLabels, majorityFilter, makeLabelSampler } from './contour.js';
 
 // ray length used for parallel (orthographic) occlusion rays, mm
 const ORTHO_RAY = 2000;
@@ -66,6 +67,28 @@ function deshadePixels(data) {
     data[i + 2] = Math.min(255, Math.round(b * k));
   }
 }
+
+/** Nearest palette index for a pixel within tolerance (squared, ×3 channels),
+ *  or -1. Same hue at a different brightness beats a numerically-closer wrong
+ *  hue when de-shading is on (shaded red must match red, not black). */
+function snapToPalette(r, g, b, palette, tolSq) {
+  let best = -1, bestD = Infinity;
+  for (let k = 0; k < palette.length; k++) {
+    const c = palette[k];
+    let e = (r - c[0]) ** 2 + (g - c[1]) ** 2 + (b - c[2]) ** 2;
+    if (e > 900 && deshadeEnabled && sameChroma(r, g, b, c[0], c[1], c[2])) e *= 0.2;
+    if (e < bestD) { bestD = e; best = k; }
+  }
+  return bestD > tolSq ? -1 : best;
+}
+
+// Detail level → target edge length along color boundaries, in decal-image
+// pixels (finer levels cut the outline into shorter, smoother segments)
+const DETAIL_PX = { 1: 14, 2: 10, 3: 6, 4: 4, 5: 2.5 };
+export function detailTargetPx(level) { return DETAIL_PX[level] || 6; }
+
+// decal images are labelled at up to this many pixels on the long side
+const MAX_LABEL_PX = 1024;
 
 /**
  * Create new filament groups from sampled image colors (packed 0xRRGGBB).
@@ -277,96 +300,196 @@ export class ProjectionSession {
   }
 
   /**
-   * Sample the decal at an arbitrary surface point: returns the palette group
-   * index, or -1 where the decal has no effect. Used by subdivision.
+   * Label image for a decal: each pixel → palette index, or -1 where it's
+   * transparent / matches no filament. Downscaled to MAX_LABEL_PX, speckle
+   * cleaned for multi-color images, padded with a 1px -1 border, plus its
+   * boundary-distance map. kind (unpadded) records 0 transparent / 1 no
+   * match / 2 painted, for the status counts.
    */
-  _makeDecalClassifier(painter, viewer, img, ov, tolerance) {
-    const camera = viewer.camera;
-    const rect = viewer.renderer.domElement.getBoundingClientRect();
-    const imgW = img.width, imgH = img.height;
+  _decalLabelMap(painter, img, tolerance) {
+    const scale = Math.min(1, MAX_LABEL_PX / Math.max(img.width, img.height));
+    const w = Math.max(1, Math.round(img.width * scale));
+    const h = Math.max(1, Math.round(img.height * scale));
     const tmp = document.createElement('canvas');
-    tmp.width = imgW;
-    tmp.height = imgH;
+    tmp.width = w;
+    tmp.height = h;
     const ctx = tmp.getContext('2d');
-    ctx.drawImage(img, 0, 0);
-    const pixels = ctx.getImageData(0, 0, imgW, imgH).data;
+    ctx.drawImage(img, 0, 0, w, h);
+    const pixels = ctx.getImageData(0, 0, w, h).data;
     deshadePixels(pixels);
     const palette = painter.groups.map((g) => {
       const n = parseInt(g.color.slice(1), 16);
       return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
     });
-    const raycaster = new THREE.Raycaster();
-    raycaster.firstHitOnly = true;
-    const camPos = camera.position;
-    const isOrtho = !camera.isPerspectiveCamera;
-    const fwd = camera.getWorldDirection(new THREE.Vector3());
-    const origin = new THREE.Vector3();
+    const tolSq = tolerance * tolerance * 3;
+    let labels = new Int16Array(w * h);
+    const kind = new Uint8Array(w * h);
+    const present = new Set();
+    for (let i = 0; i < w * h; i++) {
+      if (pixels[i * 4 + 3] < 128) { labels[i] = -1; continue; }
+      const L = snapToPalette(pixels[i * 4], pixels[i * 4 + 1], pixels[i * 4 + 2], palette, tolSq);
+      labels[i] = L;
+      kind[i] = L < 0 ? 1 : 2;
+      present.add(L);
+    }
+    if (present.size > 1) labels = majorityFilter(labels, w, h);
+    const P = padLabels(labels, w, h, -1);
+    const dist = labelDistance(P.labels, P.w, P.h);
+    return { labels: P.labels, dist, w, h, pw: P.w, ph: P.h, kind, pixels };
+  }
+
+  /**
+   * Auto-palette samples straight from the decal's pixels: a grid of image
+   * pixels, kept only where they land on a visible, front-facing part of the
+   * model. Independent of mesh density, so coarse meshes sample as well as
+   * dense ones.
+   */
+  _collectDecalPixelSamples(viewer, lm, ov) {
+    const rect = viewer.renderer.domElement.getBoundingClientRect();
     const cos = Math.cos(ov.rotDeg * Math.PI / 180);
     const sin = Math.sin(ov.rotDeg * Math.PI / 180);
-    const tolSq = tolerance * tolerance * 3;
-    const v = new THREE.Vector3();
-    const pv = new THREE.Vector3();
+    const step = Math.max(1, Math.round(Math.max(lm.w, lm.h) / 128));
+    const samples = [];
+    const camera = viewer.camera;
     const dir = new THREE.Vector3();
-    const mesh = painter.mesh;
-
-    // all cheap tests first; the occlusion raycast runs only for points that
-    // would otherwise actually paint — a huge win on large meshes
-    const classify = (x, y, z, nx, ny, nz) => {
-      v.set(x, y, z);
-      let dist;
-      if (isOrtho) {
-        dir.copy(fwd); // parallel rays
-        dist = ORTHO_RAY;
-      } else {
-        dir.copy(v).sub(camPos);
-        dist = dir.length();
-        dir.divideScalar(dist);
+    for (let iy = 0; iy < lm.h; iy += step) {
+      for (let ix = 0; ix < lm.w; ix += step) {
+        const i = (iy * lm.w + ix) * 4;
+        if (lm.pixels[i + 3] < 128 || isEdgePixel(lm.pixels, ix, iy, lm.w, lm.h)) continue;
+        // image pixel → overlay-local → screen (inverse of the decal mapping)
+        const lx = ((ix + 0.5) / lm.w - 0.5) * ov.w, ly = ((iy + 0.5) / lm.h - 0.5) * ov.h;
+        const sx = ov.cx + lx * cos - ly * sin, sy = ov.cy + lx * sin + ly * cos;
+        const hit = viewer.pick({ clientX: rect.left + sx, clientY: rect.top + sy });
+        if (!hit || !hit.face) continue;
+        if (camera.isPerspectiveCamera) dir.copy(hit.point).sub(camera.position).normalize();
+        else camera.getWorldDirection(dir);
+        if (hit.face.normal.dot(dir) > -0.15) continue;
+        samples.push((lm.pixels[i] << 16) | (lm.pixels[i + 1] << 8) | lm.pixels[i + 2]);
       }
-      if (nx * dir.x + ny * dir.y + nz * dir.z > -0.15) return -1;
-      const p = pv.copy(v).project(camera);
-      if (p.z > 1) return -1;
-      const sx = (p.x + 1) / 2 * rect.width;
-      const sy = (1 - p.y) / 2 * rect.height;
+    }
+    return samples;
+  }
+
+  /**
+   * Decal projection with contour cutting (Detail above Off). The mesh is
+   * refined along the decal's color outlines, then cut exactly where each
+   * outline crosses every edge (see contour.js), so painted edges follow the
+   * image's real shapes — smooth, no sawtooth slivers — and the mesh stays
+   * watertight. Rebuilds geometry, so undo history is cleared.
+   */
+  async _applyDecalCut(painter, viewer, img, ov, { tolerance, detail, autoPalette, onProgress }) {
+    const camera = viewer.camera;
+    const rect = viewer.renderer.domElement.getBoundingClientRect();
+    const progress = (base, span) => (f, phase) => onProgress?.(base + span * Math.min(1, f), phase);
+
+    let lm = this._decalLabelMap(painter, img, tolerance);
+    let created = 0;
+    if (autoPalette) {
+      created = createGroupsFromSamples(painter, this._collectDecalPixelSamples(viewer, lm, ov));
+      lm = this._decalLabelMap(painter, img, 999); // palette now spans the image
+    }
+    const sample = makeLabelSampler(lm.labels, lm.dist, lm.pw, lm.ph, -1);
+
+    const cos = Math.cos(ov.rotDeg * Math.PI / 180);
+    const sin = Math.sin(ov.rotDeg * Math.PI / 180);
+    const v = new THREE.Vector3();
+    const far = { label: -1, dist: 1e6 };
+    // vertex → screen → overlay-local → decal pixel → region + boundary distance
+    const field = (x, y, z) => {
+      const p = v.set(x, y, z).project(camera);
+      if (p.z > 1) return far;
+      const sx = (p.x + 1) / 2 * rect.width, sy = (1 - p.y) / 2 * rect.height;
       const dx = sx - ov.cx, dy = sy - ov.cy;
       const lx = dx * cos + dy * sin + ov.w / 2;
       const ly = -dx * sin + dy * cos + ov.h / 2;
-      if (lx < 0 || ly < 0 || lx >= ov.w || ly >= ov.h) return -1;
-      const ix = Math.min(imgW - 1, Math.max(0, Math.round(lx / ov.w * imgW)));
-      const iy = Math.min(imgH - 1, Math.max(0, Math.round(ly / ov.h * imgH)));
-      const i = (iy * imgW + ix) * 4;
-      if (pixels[i + 3] < 128) return -1;
-      const r = pixels[i], g = pixels[i + 1], b = pixels[i + 2];
-      let best = -1, bestD = Infinity;
-      for (let k = 0; k < palette.length; k++) {
-        const c = palette[k];
-        let e = (r - c[0]) ** 2 + (g - c[1]) ** 2 + (b - c[2]) ** 2;
-        // same hue at a different brightness beats a numerically-closer
-        // wrong hue (shaded red must match red, not black)
-        if (e > 900 && deshadeEnabled && sameChroma(r, g, b, c[0], c[1], c[2])) e *= 0.2;
-        if (e < bestD) { bestD = e; best = k; }
+      return sample(lx / ov.w * lm.w + 1, ly / ov.h * lm.h + 1);
+    };
+    const classify = (x, y, z) => field(x, y, z).label;
+
+    // only triangles under the overlay and not facing away get refined/cut
+    const rMax = Math.hypot(ov.w, ov.h) / 2;
+    const camPos = camera.position;
+    const fwd = camera.getWorldDirection(new THREE.Vector3());
+    const isOrtho = !camera.isPerspectiveCamera;
+    const triInScope = (pos, o) => {
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, front = false;
+      for (let k = 0; k < 3; k++) {
+        v.set(pos[o + k * 3], pos[o + k * 3 + 1], pos[o + k * 3 + 2]).project(camera);
+        if (v.z <= 1) front = true;
+        const sx = (v.x + 1) / 2 * rect.width, sy = (1 - v.y) / 2 * rect.height;
+        if (sx < minX) minX = sx; if (sx > maxX) maxX = sx;
+        if (sy < minY) minY = sy; if (sy > maxY) maxY = sy;
       }
-      if (bestD > tolSq) return -1;
+      if (!front) return false;
+      if (maxX < ov.cx - rMax || minX > ov.cx + rMax || maxY < ov.cy - rMax || minY > ov.cy + rMax) return false;
+      // skip clearly back-facing triangles (the far side never shows the decal)
+      const ux = pos[o + 3] - pos[o], uy = pos[o + 4] - pos[o + 1], uz = pos[o + 5] - pos[o + 2];
+      const wx = pos[o + 6] - pos[o], wy = pos[o + 7] - pos[o + 1], wz = pos[o + 8] - pos[o + 2];
+      const nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx;
+      let dx, dy, dz;
+      if (isOrtho) { dx = fwd.x; dy = fwd.y; dz = fwd.z; }
+      else { dx = pos[o] - camPos.x; dy = pos[o + 1] - camPos.y; dz = pos[o + 2] - camPos.z; }
+      return nx * dx + ny * dy + nz * dz < 0.3 * Math.hypot(nx, ny, nz) * Math.hypot(dx, dy, dz);
+    };
+
+    // refinement scale: Detail sets the outline segment length in decal pixels
+    const bb = painter.mesh.geometry.boundingBox;
+    const diag = bb.min.distanceTo(bb.max);
+    const center = bb.getCenter(new THREE.Vector3());
+    const dist = camera.position.distanceTo(center);
+    const worldPerPx = camera.isPerspectiveCamera
+      ? (2 * dist * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))) / rect.height
+      : (camera.top - camera.bottom) / camera.zoom / rect.height;
+    const worldPerImgPx = worldPerPx * (ov.w / lm.w);
+    const minEdge = Math.max(diag * 0.0008, detailTargetPx(detail) * worldPerImgPx);
+    const maxEdge = Math.max(minEdge * 2, (Math.min(ov.w, ov.h) * worldPerPx) / (2 * detail));
+
+    const refined = await refineMesh(
+      painter.mesh.geometry.attributes.position.array, painter.triGroup, painter.blocked, classify,
+      { maxRounds: detail + 3, minEdge, maxEdge, triInScope, onProgress: progress(0, 0.5) }
+    );
+    const cut = await cutAlongField(refined.positions, refined.triGroup, refined.blocked, field,
+      { triInScope, onProgress: progress(0.5, 0.25) });
+    await painter.adoptRefined(cut.positions, cut.triGroup, cut.blocked);
+
+    // paint each piece with its region — only where the camera actually sees it
+    const raycaster = new THREE.Raycaster();
+    raycaster.firstHitOnly = true;
+    const cen = painter.triCentroids, nor = painter.triNormals;
+    const dir = new THREE.Vector3(), origin = new THREE.Vector3();
+    const counts = { applied: 0, outside: 0, transparent: 0, noMatch: 0, hidden: 0, created };
+    for (let t = 0; t < painter.triCount; t++) {
+      if ((t & 0x7fff) === 0 && t > 0) {
+        onProgress?.(0.75 + 0.25 * (t / painter.triCount), 'painting');
+        await new Promise((r) => setTimeout(r, 0));
+      }
+      const L = cut.labels[t];
+      if (L < 0) {
+        // where did an unpainted piece fall? (status line only)
+        const p = v.set(cen[t * 3], cen[t * 3 + 1], cen[t * 3 + 2]).project(camera);
+        const sx = (p.x + 1) / 2 * rect.width, sy = (1 - p.y) / 2 * rect.height;
+        const dx = sx - ov.cx, dy = sy - ov.cy;
+        const lx = dx * cos + dy * sin + ov.w / 2, ly = -dx * sin + dy * cos + ov.h / 2;
+        if (p.z > 1 || lx < 0 || ly < 0 || lx >= ov.w || ly >= ov.h) { counts.outside++; continue; }
+        const ix = Math.min(lm.w - 1, Math.floor(lx / ov.w * lm.w)), iy = Math.min(lm.h - 1, Math.floor(ly / ov.h * lm.h));
+        if (lm.kind[iy * lm.w + ix] === 1) counts.noMatch++; else counts.transparent++;
+        continue;
+      }
+      v.set(cen[t * 3], cen[t * 3 + 1], cen[t * 3 + 2]);
+      let d;
+      if (isOrtho) { dir.copy(fwd); d = ORTHO_RAY; }
+      else { dir.copy(v).sub(camPos); d = dir.length(); dir.divideScalar(d); }
+      if (nor[t * 3] * dir.x + nor[t * 3 + 1] * dir.y + nor[t * 3 + 2] * dir.z > -0.15) { counts.hidden++; continue; }
       if (isOrtho) origin.copy(v).addScaledVector(fwd, -ORTHO_RAY);
       else origin.copy(camPos);
       raycaster.set(origin, dir);
-      const hits = raycaster.intersectObject(mesh, false);
-      if (!hits.length || hits[0].distance < dist - Math.max(0.05, isOrtho ? 0.1 : dist * 0.002)) return -1;
-      return best;
-    };
-
-    // cheap scope test (no raycast, no sampling): could this point possibly
-    // be affected? Used to skip whole triangles during subdivision.
-    const rMax = Math.hypot(ov.w, ov.h) / 2;
-    const inScope = (x, y, z) => {
-      v.set(x, y, z);
-      const p = v.project(camera);
-      if (p.z > 1) return false;
-      const sx = (p.x + 1) / 2 * rect.width;
-      const sy = (1 - p.y) / 2 * rect.height;
-      return Math.abs(sx - ov.cx) <= rMax && Math.abs(sy - ov.cy) <= rMax;
-    };
-
-    return { classify, inScope };
+      const hits = raycaster.intersectObject(painter.mesh, false);
+      if (!hits.length || hits[0].distance < d - Math.max(0.05, isOrtho ? 0.1 : d * 0.002)) { counts.hidden++; continue; }
+      painter._assign(t, L);
+      counts.applied++;
+    }
+    painter.mesh.geometry.attributes.color.needsUpdate = true;
+    return counts;
   }
 
   /**
@@ -382,74 +505,13 @@ export class ProjectionSession {
     const camera = viewer.camera;
     camera.updateMatrixWorld();
     const rect = viewer.renderer.domElement.getBoundingClientRect();
-
-    // Optional pre-pass: subdivide triangles that straddle decal color
-    // boundaries so the painted edge is crisper than the source tessellation.
+    // Detail above Off: cut the mesh exactly along the decal's color outlines
     if (subdivide > 0) {
-      // in auto-palette mode the groups don't exist yet — classify wide open
-      // so decal-vs-outside boundaries still split
-      const subdivTol = autoPalette ? 999 : tolerance;
-      const { classify, inScope } = this._makeDecalClassifier(painter, viewer, img, ov, subdivTol);
-      const bb = painter.mesh.geometry.boundingBox;
-      const diag = bb.min.distanceTo(bb.max);
-      // higher Detail levels lower the refinement floor so small text keeps
-      // gaining fidelity instead of hitting the coarse floor
-      const minEdgeVal = Math.max(0.1, diag * (subdivide >= 5 ? 0.0015 : 0.003));
-
-      // phase-1 target: bring in-scope triangles down to decal scale, so
-      // lathe-style slivers (huge triangles the decal only crosses in the
-      // middle) can't slip past corner/centroid sampling
-      const center = bb.getCenter(new THREE.Vector3());
-      const dist = camera.position.distanceTo(center);
-      const worldPerPx = camera.isPerspectiveCamera
-        ? (2 * dist * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))) / rect.height
-        : (camera.top - camera.bottom) / camera.zoom / rect.height;
-      // phase-1 target scales with Detail: finer levels pre-cut triangles
-      // small enough that thin features (letter strokes) can't slip between
-      // the classification sample points
-      const maxEdge = Math.max(minEdgeVal * 2, (Math.min(ov.w, ov.h) * worldPerPx) / (2 * subdivide));
-
-      // triangle-level scope: projected screen bbox vs overlay bbox — catches
-      // triangles whose corners all fall outside the overlay
-      const rMax = Math.hypot(ov.w, ov.h) / 2;
-      const v3 = new THREE.Vector3();
-      const triInScope = (pos, o) => {
-        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-        let anyFront = false;
-        for (let k = 0; k < 3; k++) {
-          v3.set(pos[o + k * 3], pos[o + k * 3 + 1], pos[o + k * 3 + 2]).project(camera);
-          if (v3.z <= 1) anyFront = true;
-          const sx = (v3.x + 1) / 2 * rect.width;
-          const sy = (1 - v3.y) / 2 * rect.height;
-          if (sx < minX) minX = sx;
-          if (sx > maxX) maxX = sx;
-          if (sy < minY) minY = sy;
-          if (sy > maxY) maxY = sy;
-        }
-        if (!anyFront) return false;
-        return maxX >= ov.cx - rMax && minX <= ov.cx + rMax &&
-               maxY >= ov.cy - rMax && minY <= ov.cy + rMax;
-      };
-
-      const refined = await refineMesh(
-        painter.mesh.geometry.attributes.position.array,
-        painter.triGroup,
-        painter.blocked,
-        classify,
-        {
-          maxRounds: subdivide,
-          minEdge: minEdgeVal,
-          inScope,
-          triInScope,
-          maxEdge,
-          onProgress: onProgress ? (f) => onProgress(f * 0.6, 'subdividing') : undefined,
-        }
-      );
-      await painter.adoptRefined(refined.positions, refined.triGroup, refined.blocked);
+      return this._applyDecalCut(painter, viewer, img, ov, { tolerance, detail: subdivide, autoPalette, onProgress });
     }
 
-    // auto-create filament groups from the image's dominant colors — AFTER
-    // subdivision, so sliver-topology meshes have sampleable triangles
+    // Detail Off: paint whole triangles (one undoable stroke, no geometry
+    // change). Auto-create filament groups from the image's dominant colors.
     let created = 0;
     if (autoPalette) {
       const samples = await this._collectDecalSamples(painter, viewer, img, ov, onProgress);

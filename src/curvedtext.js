@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { labelDistance, padLabels, makeLabelSampler } from './contour.js';
 
 /**
  * Per-glyph "use surface" text: each glyph is rasterized to its own mask and
@@ -253,4 +254,47 @@ export function buildTextClassifier(placements, group, heightMm) {
   };
 
   return { classify, inScope, triInScope, band };
+}
+
+/**
+ * Region field for contour cutting (contour.js): at a surface point, is it on
+ * a glyph's ink (→ group) or not (→ -1), and how far, in mm, is the nearest
+ * glyph outline? Built from each glyph mask's distance map, sampled in that
+ * glyph's own tangent frame, so the cut follows every letter's real outline.
+ * Same scope rules as buildTextClassifier (normal band, front-facing).
+ */
+export function buildTextField(placements, group, heightMm) {
+  const band = heightMm * 0.6;
+  const glyphs = placements.map((g) => {
+    const lab = new Int16Array(g.w * g.h);
+    for (let i = 0; i < lab.length; i++) lab[i] = g.mask[i] ? group : -1;
+    const P = padLabels(lab, g.w, g.h, -1);
+    const dist = labelDistance(P.labels, P.w, P.h);
+    return { g, sample: makeLabelSampler(P.labels, dist, P.w, P.h, -1), mmPerPx: (2 * g.halfH) / g.h };
+  });
+  const out = { label: -1, dist: 1e3 };
+  return (x, y, z, nx, ny, nz) => {
+    let inside = false, inD = 0, outD = 1e3;
+    for (const G of glyphs) {
+      const g = G.g;
+      const dx = x - g.P.x, dy = y - g.P.y, dz = z - g.P.z;
+      const h = dx * g.N.x + dy * g.N.y + dz * g.N.z;
+      if (h > band || h < -band) continue;
+      if (nx * g.N.x + ny * g.N.y + nz * g.N.z <= 0) continue;
+      const u = dx * g.T.x + dy * g.T.y + dz * g.T.z;
+      const w = dx * g.B.x + dy * g.B.y + dz * g.B.z;
+      // far outside this glyph's box can't beat the best distance so far
+      if (Math.abs(u) - g.halfW > outD || Math.abs(w) - g.halfH > outD) continue;
+      const r = G.sample((u / (2 * g.halfW) + 0.5) * g.w + 1, (0.5 - w / (2 * g.halfH)) * g.h + 1);
+      const dmm = r.dist * G.mmPerPx;
+      if (r.label === group) {
+        if (!inside || dmm > inD) { inside = true; inD = dmm; }
+      } else if (dmm < outD) {
+        outD = dmm;
+      }
+    }
+    out.label = inside ? group : -1;
+    out.dist = inside ? inD : outD;
+    return out;
+  };
 }

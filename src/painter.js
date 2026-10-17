@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { refineMesh } from './subdivide.js';
+import { cutAlongField } from './contour.js';
 import { buildMeshCachesFromPositions } from './meshcore.js';
 import { buildMeshCachesAsync } from './meshcache.js';
 
@@ -303,7 +304,29 @@ export class Painter {
    */
   async applyRegionPaint(classify, opts = {}) {
     if (!this.mesh) return 0;
-    const { subdivide = 0, inScope, triInScope, minEdge, maxEdge, onProgress } = opts;
+    const { subdivide = 0, inScope, triInScope, minEdge, maxEdge, onProgress, field } = opts;
+    if (subdivide && field) {
+      // contour cut: refine near the outline, then split exactly along it
+      // (contour.js) and paint each piece with its region — smooth edges
+      const bb = this.mesh.geometry.boundingBox;
+      const diag = bb.min.distanceTo(bb.max);
+      const minEdgeVal = minEdge ?? Math.max(0.15, diag * 0.003);
+      const prog = (base, span) => (f, phase) => onProgress?.(base + span * Math.min(1, f), phase);
+      const refined = await refineMesh(
+        this.mesh.geometry.attributes.position.array,
+        this.triGroup, this.blocked, (x, y, z, nx, ny, nz) => field(x, y, z, nx, ny, nz).label,
+        { maxRounds: subdivide + 3, minEdge: minEdgeVal, inScope, triInScope, maxEdge, onProgress: prog(0, 0.6) }
+      );
+      const cut = await cutAlongField(refined.positions, refined.triGroup, refined.blocked, field,
+        { triInScope, onProgress: prog(0.6, 0.4) });
+      await this.adoptRefined(cut.positions, cut.triGroup, cut.blocked);
+      let applied = 0;
+      for (let t = 0; t < this.triCount; t++) {
+        if (cut.labels[t] >= 0) { this._assign(t, cut.labels[t]); applied++; }
+      }
+      this.mesh.geometry.attributes.color.needsUpdate = true;
+      return applied;
+    }
     if (subdivide) {
       const bb = this.mesh.geometry.boundingBox;
       const diag = bb.min.distanceTo(bb.max);
