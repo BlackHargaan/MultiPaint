@@ -22,6 +22,16 @@ exports double as project save files. Bambu/Orca-painted 3MFs import too
 are picked up when present). Your filament palette (names + colors) is
 remembered between sessions automatically.
 
+**Inside-out and badly wound STLs are repaired on import.** Some exporters
+write models inside-out (every face pointing in) or with patches of faces wound
+backwards; clicks would then land on the *far* side of the model, so brushes,
+fills, decals and text hit the wrong place. MultiPaint checks every shell as it
+loads: backwards patches are made consistent with their neighbors, and a shell
+whose volume comes out negative is turned right side out. Correct models are
+left untouched, flat or open surfaces are never flipped on a guess, and the
+status bar says when a repair was made. Big meshes are checked in a background
+worker.
+
 ### Install / offline
 
 MultiPaint is a PWA: from a `build` + `preview` (or any hosted deploy) the
@@ -385,6 +395,7 @@ land where they belong on the plate. Unpainted (Base) faces print on slot 1.
   helpers for the shelf
 - `src/filaments.js` — curated real-world filament catalog for the library picker
 - `src/meshcore.js` — pure per-triangle caches (adjacency, normals, centroids)
+  and `orientShells` (inside-out / mixed-winding repair on import)
 - `src/meshcache.js` + `src/meshcache.worker.js` — build those caches in a Web
   Worker for big meshes (import and post-subdivision rebuild) so the UI doesn't
   freeze; synchronous fallback for small meshes / non-worker environments

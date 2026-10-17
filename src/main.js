@@ -2,7 +2,7 @@ import './style.css';
 import * as THREE from 'three';
 import { Viewer } from './viewer.js';
 import { Painter, connectedComponents } from './painter.js';
-import { buildMeshCachesAsync } from './meshcache.js';
+import { buildMeshCachesAsync, orientShellsAsync } from './meshcache.js';
 import { exportProject3MF } from './export3mf.js';
 import { ProjectionSession, setDeshade } from './projection.js';
 import { removeBackground } from './imagebg.js';
@@ -207,7 +207,11 @@ function refreshGhosts() {
  * centered, so the saved origin/blocked are used as-is.
  */
 async function makeObjectEntry(raw, { center = true } = {}) {
-  const prepped = viewer.prepGeometry(raw.positions, { center });
+  // inside-out / mixed-winding STLs make front-face picking hit the far side;
+  // repair the winding before anything builds on it (paint stays per-triangle)
+  const input = raw.positions instanceof Float32Array ? raw.positions : Float32Array.from(raw.positions);
+  const { positions, stats: orientFix } = await orientShellsAsync(input);
+  const prepped = viewer.prepGeometry(positions, { center });
   const origin = center ? prepped.origin : (raw.origin || { x: 0, y: 0, z: 0 });
   const geometry = prepped.geometry;
   const caches = await buildMeshCachesAsync(geometry.attributes.position.array);
@@ -228,6 +232,7 @@ async function makeObjectEntry(raw, { center = true } = {}) {
     undoStack: [],
     redoStack: [],
     origin,
+    orientFix,
   };
 }
 
@@ -250,6 +255,21 @@ async function ingestObjects(rawObjects, { replace }) {
   document.getElementById('btn-proj-return').disabled = true;
   // activate the first newly-added object; frame only when the project was empty
   activate(entries[0].id, { frame: wasEmpty });
+  return entries;
+}
+
+/** Status-bar note for winding repairs made on import, or ''. */
+function orientFixNote(entries) {
+  let shells = 0, faces = 0;
+  for (const e of entries) {
+    if (!e.orientFix) continue;
+    shells += e.orientFix.shellsInverted;
+    faces += e.orientFix.facesReoriented;
+  }
+  const parts = [];
+  if (shells) parts.push(`turned ${shells} inside-out shell${shells === 1 ? '' : 's'} right side out`);
+  if (faces) parts.push(`fixed ${faces.toLocaleString()} backwards face${faces === 1 ? '' : 's'}`);
+  return parts.length ? ` Repaired the mesh winding: ${parts.join(' and ')}.` : '';
 }
 
 async function loadFile(file, { append = false } = {}) {
@@ -280,13 +300,14 @@ async function loadFile(file, { append = false } = {}) {
       filamentColors.forEach((c, i) => { if (painter.groups[i]) painter.groups[i].color = c; });
     }
 
-    await ingestObjects(raw, { replace: !append });
+    const entries = await ingestObjects(raw, { replace: !append });
     renderGroups();
     const painted = raw.reduce((a, o) => a + (o.triGroup ? o.triGroup.reduce((s, g) => s + (g > 0 ? 1 : 0), 0) : 0), 0);
     setStatus(
       `${append ? 'Appended' : 'Loaded'} ${file.name} — ${raw.length} object(s), ` +
       `${objects.length} on the shelf` +
-      (painted ? `, ${painted.toLocaleString()} triangles already painted.` : '.'));
+      (painted ? `, ${painted.toLocaleString()} triangles already painted.` : '.') +
+      orientFixNote(entries));
   } catch (err) {
     console.error(err);
     setStatus(`Failed to load ${file.name}: ${err.message}`);
