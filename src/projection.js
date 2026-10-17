@@ -445,7 +445,7 @@ export class ProjectionSession {
           onProgress: onProgress ? (f) => onProgress(f * 0.6, 'subdividing') : undefined,
         }
       );
-      painter.adoptRefined(refined.positions, refined.triGroup, refined.blocked);
+      await painter.adoptRefined(refined.positions, refined.triGroup, refined.blocked);
     }
 
     // auto-create filament groups from the image's dominant colors — AFTER

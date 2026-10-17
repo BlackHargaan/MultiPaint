@@ -47,6 +47,32 @@
           <circle cx="11" cy="8" r="2.2" fill="currentColor"/>
           <circle cx="19" cy="13" r="2.2" fill="currentColor"/>
         </symbol>
+        <!-- text: serif T -->
+        <symbol id="i-text" viewBox="0 0 24 24">
+          <path d="M5 6.5V4.5h14v2M12 4.5v15M9 19.5h6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+        </symbol>
+        <!-- image: picture frame with mountain + sun -->
+        <symbol id="i-image" viewBox="0 0 24 24">
+          <rect x="3.5" y="5" width="17" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/>
+          <path d="M5 17l4.5-5 3.5 3.5 2.5-2.5L19 17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+          <circle cx="15.5" cy="9" r="1.6" fill="currentColor"/>
+        </symbol>
+        <!-- colors: palette -->
+        <symbol id="i-colors" viewBox="0 0 24 24">
+          <path d="M12 3.5a8.5 8.5 0 1 0 0 17c1.3 0 1.9-.8 1.9-1.7 0-1.2-1-1.6-1-2.6 0-1 .8-1.7 1.9-1.7h2.2c2 0 3.5-1.6 3.5-3.6C20.5 6.6 16.7 3.5 12 3.5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+          <circle cx="7.6" cy="11" r="1.3" fill="currentColor"/>
+          <circle cx="10.2" cy="7.3" r="1.3" fill="currentColor"/>
+          <circle cx="14.6" cy="7.4" r="1.3" fill="currentColor"/>
+        </symbol>
+        <!-- objects: stacked cubes -->
+        <symbol id="i-objects" viewBox="0 0 24 24">
+          <path d="M12 3.5l7.5 4.2v8.6L12 20.5l-7.5-4.2V7.7z M12 3.5v0 M4.5 7.7L12 12l7.5-4.3 M12 12v8.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+        </symbol>
+        <!-- check: shield with tick -->
+        <symbol id="i-check" viewBox="0 0 24 24">
+          <path d="M12 3.5l7 2.8v5.2c0 4.3-3 7.6-7 9-4-1.4-7-4.7-7-9V6.3z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+          <path d="M8.6 12.2l2.4 2.4 4.4-4.6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+        </symbol>
       </defs>
     </svg>
     <div id="app">
@@ -67,50 +93,27 @@
         <button id="btn-export" class="btn btn-primary" title="Export every object on the shelf as one painted 3MF for Orca/Bambu">Export 3MF</button>
       </header>
       <main>
-        <nav id="toolrail" title="Tools">
+        <nav id="toolrail" aria-label="Tools and features">
+          <div class="rail-label">Paint</div>
           <button class="tool" data-tool="brush" title="Brush — paint triangles under a round brush (B)"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-brush"/></svg><span class="tl">Brush</span></button>
           <button class="tool" data-tool="fill" title="Smart Fill — flood across smooth surfaces, stops at sharp edges (F)"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-fill"/></svg><span class="tl">Fill</span></button>
           <button class="tool" data-tool="island" title="Island Fill — fill an entire connected shell (I)"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-island"/></svg><span class="tl">Island</span></button>
           <button class="tool" data-tool="blocker" title="Blocker — paint barriers fills can't cross; Alt-drag erases (X)"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-blocker"/></svg><span class="tl">Blocker</span></button>
           <button class="tool" data-tool="line" title="Line — drop points, commit as paint or blockers; Backspace removes the last (L)"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-line"/></svg><span class="tl">Line</span></button>
+          <div class="rail-sep"></div>
+          <div class="rail-label">Add</div>
+          <button class="rail-btn" data-panel="text" title="Text — flat, raised or engraved text (T)"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-text"/></svg><span class="tl">Text</span></button>
+          <button class="rail-btn" data-panel="image" title="Image — project a decal image, or a recolored snapshot, onto the model"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-image"/></svg><span class="tl">Image</span></button>
+          <div class="rail-sep"></div>
+          <div class="rail-label">Project</div>
+          <button class="rail-btn" data-panel="colors" title="Colors — filament groups, library and saved setups"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-colors"/></svg><span class="tl">Colors</span></button>
+          <button class="rail-btn" data-panel="objects" title="Objects — every object on the plate"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-objects"/></svg><span class="tl">Objects</span></button>
+          <button class="rail-btn" data-panel="check" title="Check — find colour detail too small to print"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-check"/></svg><span class="tl">Check</span></button>
         </nav>
         <div id="stage">
-          <div id="options-bar">
-            <label id="brush-size-wrap" class="opt">Brush size
-              <input type="range" id="brush-size" data-default="5" min="0.5" max="30" step="0.5" value="5" />
-              <span id="brush-size-val" class="opt-val">5</span>
-            </label>
-            <label id="fill-angle-wrap" class="opt" title="Starting fill reach — click and drag left/right to scrub it live">Fill reach
-              <input type="range" id="fill-angle" data-default="30" min="1" max="120" step="1" value="30" />
-              <span id="fill-angle-val" class="opt-val">30°</span>
-            </label>
-            <label id="line-width-wrap" class="opt" title="Stripe width in mm">Line width
-              <input type="range" id="line-width" data-default="3" min="0.2" max="20" step="0.2" value="3" />
-              <span id="line-width-val" class="opt-val">3</span>
-            </label>
-            <label id="line-surface-wrap" class="opt" title="Drape the stripe over the surface between points (geodesic path) so it can't tunnel under the model on curves. Off = straight 3D chord.">
-              <input type="checkbox" id="line-surface" checked /> Cling to surface
-            </label>
-            <div id="line-actions" class="opt-btns">
-              <button id="btn-line-paint" class="btn" title="Paint the line with the active color">Paint line</button>
-              <button id="btn-line-block" class="btn" title="Turn the line into fill blockers">Block line</button>
-              <button id="btn-line-clear" class="btn" title="Discard the line points">Clear</button>
-            </div>
-            <label id="through-wrap" class="opt" title="Paint everything inside the brush sphere, including hidden back sides of thin walls">
-              <input type="checkbox" id="brush-through" /> Through
-            </label>
-            <label id="stroke-subdiv-wrap" class="opt" title="Subdivide triangles along the stroke edge so brush and line boundaries come out crisp on coarse meshes. Rebuilds geometry on each stroke — clears undo history.">
-              <input type="checkbox" id="stroke-subdiv" /> Crisp edges
-            </label>
-            <span class="opt-spacer"></span>
-            <label id="mirror-wrap" class="opt" title="Mirror painting: every stroke is reflected across the model-center plane of this axis, so you paint both sides at once (needs a symmetric model)">Mirror
-              <select id="mirror-axis">
-                <option value="">Off</option>
-                <option value="x">X ↔</option>
-                <option value="y">Y ↔</option>
-                <option value="z">Z ↕</option>
-              </select>
-            </label>
+          <div id="palette-bar" aria-label="Filament colors">
+            <div id="palette-chips"></div>
+            <span id="palette-name"></span>
           </div>
           <div id="viewport">
             <div id="view-cluster">
@@ -134,191 +137,268 @@
             </div>
           </div>
         </div>
-        <aside id="sidebar">
-          <details class="panel" open>
-            <summary>Objects</summary>
-          <div id="object-list"></div>
-          <label class="proj-opt" title="Show the other objects as translucent context at their plate positions (relative to the object you're editing)">
-            <input type="checkbox" id="ghost-others" checked /> Ghost other objects
-          </label>
-          <div id="object-actions">
-            <button id="btn-split-shells" class="btn" disabled title="Split the active object's disconnected shells into separate objects">Split into parts</button>
-            <button id="btn-arrange" class="btn" disabled title="Re-pack all objects into a tidy, non-overlapping grid on the plate">Auto-arrange</button>
+        <aside id="panel" aria-label="Settings">
+          <div id="panel-head">
+            <span id="panel-title">Brush</span>
+            <button id="btn-panel-close" class="icon-btn" title="Hide settings — click a rail button to reopen">✕</button>
           </div>
-          <p class="hint">Each object is painted independently and shelved as you
-          switch. Click one to edit it; use <b>+ Append</b> (top bar) to add more
-          files. <b>Export 3MF</b> writes them all as one multi-object file.</p>
-          </details>
-          <details class="panel" open>
-            <summary>Filament groups</summary>
-          <div id="ams-presets">
-            <select id="ams-select" class="proj-select" title="Load a saved filament / AMS setup">
-              <option value="">Saved setups…</option>
-            </select>
-            <button id="btn-ams-save" class="btn" title="Save the current groups as a reusable filament setup">Save…</button>
-            <button id="btn-ams-del" class="btn" title="Delete the selected saved setup" disabled>✕</button>
-          </div>
-          <div id="groups"></div>
-          <div id="group-add-row">
-            <button id="btn-add-group" class="btn">+ Add group</button>
-            <button id="btn-add-library" class="btn" title="Add a group by picking a real filament from the library">＋ From library</button>
-          </div>
-          <div id="region-ops">
-            <button id="btn-grow" class="btn" title="Expand the active group's region by one triangle ring (+)">Grow</button>
-            <button id="btn-shrink" class="btn" title="Contract the active group's region by one triangle ring (-)">Shrink</button>
-            <button id="btn-despeckle" class="btn" title="Absorb tiny leftover paint islands into their surrounding color">Despeckle</button>
-            <button id="btn-clear-blockers" class="btn" title="Remove all blockers">Clear blockers</button>
-          </div>
-          <p class="hint">Click a group to paint with it. The number is the
-          filament slot it will be assigned to in the slicer.</p>
-          </details>
-          <details class="panel">
-            <summary>Printability</summary>
-          <label class="proj-opt" title="Smallest colour patch (in mm) that will still print as a distinct colour. Painted regions narrower than this won't reproduce cleanly on an FDM printer — roughly a few nozzle widths.">Min feature (mm)
-            <input type="range" id="pf-size" data-default="2" min="0.4" max="6" step="0.1" value="2" />
-            <span id="pf-size-val">2.0</span>
-          </label>
-          <div id="pf-actions">
-            <button id="btn-pf-check" class="btn">Check active object</button>
-            <button id="btn-pf-fix" class="btn" disabled title="Absorb every flagged patch into its surrounding colour (one undoable step)">Fix flagged</button>
-            <button id="btn-pf-clear" class="btn" disabled title="Hide the highlight">Clear</button>
-          </div>
-          <p class="hint" id="pf-result">Highlights painted regions too small or
-          thin to print as a distinct colour, so you can grow or remove them
-          before export. <b>Fix flagged</b> absorbs them into the surrounding
-          colour.</p>
-          </details>
-          <details class="panel">
-            <summary>Image projection</summary>
-          <div id="projection">
-            <button id="btn-decal-load">Load decal image…</button>
-            <input type="file" id="decal-file" accept="image/png,image/jpeg,image/webp" hidden />
-            <div id="text-decal">
-              <input type="text" id="text-input" placeholder="Type text for a decal…" />
-              <div id="text-font-row">
-                <select id="text-font" class="proj-select" title="Font family — click ⟳ to load your installed system fonts"></select>
-                <button id="btn-text-fonts" title="Load your installed system fonts (asks the browser's permission)">⟳</button>
+          <div id="panel-body">
+
+            <!-- ===== paint tools ===== -->
+            <section class="panel-page" data-page="paint">
+              <label id="brush-size-wrap" class="field">Brush size
+                <span class="field-row">
+                  <input type="range" id="brush-size" data-default="5" min="0.5" max="30" step="0.5" value="5" />
+                  <span id="brush-size-val" class="opt-val">5</span>
+                </span>
+              </label>
+              <label id="fill-angle-wrap" class="field" title="Starting fill reach — click and drag left/right to scrub it live">Fill reach
+                <span class="field-row">
+                  <input type="range" id="fill-angle" data-default="30" min="1" max="120" step="1" value="30" />
+                  <span id="fill-angle-val" class="opt-val">30°</span>
+                </span>
+              </label>
+              <label id="line-width-wrap" class="field" title="Stripe width in mm">Line width
+                <span class="field-row">
+                  <input type="range" id="line-width" data-default="3" min="0.2" max="20" step="0.2" value="3" />
+                  <span id="line-width-val" class="opt-val">3</span>
+                </span>
+              </label>
+              <label id="line-surface-wrap" class="check" title="Drape the stripe over the surface between points (geodesic path) so it can't tunnel under the model on curves. Off = straight 3D chord.">
+                <input type="checkbox" id="line-surface" checked /> Cling to surface
+              </label>
+              <label id="through-wrap" class="check" title="Paint everything inside the brush sphere, including hidden back sides of thin walls">
+                <input type="checkbox" id="brush-through" /> Through (paint hidden back faces)
+              </label>
+              <label id="stroke-subdiv-wrap" class="check" title="Subdivide triangles along the stroke edge so brush and line boundaries come out crisp on coarse meshes. Rebuilds geometry on each stroke — clears undo history.">
+                <input type="checkbox" id="stroke-subdiv" /> Crisp edges
+              </label>
+              <div id="line-actions" class="btn-grid">
+                <button id="btn-line-paint" class="btn" title="Paint the line with the active color">Paint line</button>
+                <button id="btn-line-block" class="btn" title="Turn the line into fill blockers">Block line</button>
+                <button id="btn-line-clear" class="btn" title="Discard the line points">Clear</button>
               </div>
-              <div id="text-style-row">
-                <label title="Bold"><input type="checkbox" id="text-bold" /> Bold</label>
-                <label title="Italic"><input type="checkbox" id="text-italic" /> Italic</label>
+              <h4 class="sec">Symmetry</h4>
+              <label id="mirror-wrap" class="field" title="Mirror painting: every stroke is reflected across the model-center plane of this axis, so you paint both sides at once (needs a symmetric model)">Mirror
+                <select id="mirror-axis">
+                  <option value="">Off</option>
+                  <option value="x">X ↔</option>
+                  <option value="y">Y ↔</option>
+                  <option value="z">Z ↕</option>
+                </select>
+              </label>
+              <h4 class="sec">Active color region</h4>
+              <div id="region-ops" class="btn-grid">
+                <button id="btn-grow" class="btn" title="Expand the active group's region by one triangle ring (+)">Grow</button>
+                <button id="btn-shrink" class="btn" title="Contract the active group's region by one triangle ring (-)">Shrink</button>
+                <button id="btn-despeckle" class="btn" title="Absorb tiny leftover paint islands into their surrounding color">Despeckle</button>
+                <button id="btn-clear-blockers" class="btn" title="Remove all blockers">Clear blockers</button>
               </div>
-              <label class="proj-opt" id="text-emboss-wrap" title="Emboss the text as real 3D geometry: Raised adds it on the surface, Engraved cuts it in — then paints those new faces the active filament. Off just paints (flat decal, or wrapped per-glyph below). You click once on the model to place it.">Emboss
-                <select id="text-emboss" class="proj-select">
-                  <option value="off" selected>Off (paint only)</option>
-                  <option value="raise">Raised</option>
-                  <option value="engrave">Engraved</option>
-                </select>
-              </label>
-              <label class="proj-opt" id="text-depth-wrap" style="display:none" title="How far embossed text rises above (Raised) or sinks below (Engraved) the surface, in millimeters">Depth (mm)
-                <input type="number" id="text-depth" min="0.1" max="10" step="0.1" value="0.6" />
-              </label>
-              <label class="proj-opt" title="Wrap the text around the surface, projecting each glyph in its own surface tangent frame — for cylinders (mugs, coolers) where a flat decal would smear. You then click points on the model to lay the baseline.">
-                <input type="checkbox" id="text-wrap" /> Wrap on surface (per glyph)
-              </label>
-              <label class="proj-opt" id="text-height-wrap" style="display:none" title="Text (cap) height on the model, in millimeters">Height (mm)
-                <input type="number" id="text-height" min="1" max="200" step="0.5" value="10" />
-              </label>
-              <label class="proj-opt" id="text-rot-wrap" style="display:none" title="Tilt the level baseline in the surface plane (0° = horizontal, wraps level around the model)">Rotation
-                <input type="range" id="text-rot" data-default="0" min="-180" max="180" step="1" value="0" />
-                <span id="text-rot-val">0°</span>
-              </label>
-              <label class="proj-opt" id="text-align-wrap" style="display:none" title="Where the text sits relative to the click point">Align
-                <select id="text-align" class="proj-select">
-                  <option value="center" selected>Center</option>
-                  <option value="left">Left</option>
-                  <option value="right">Right</option>
-                </select>
-              </label>
-              <label class="proj-opt" id="text-gap-wrap" style="display:none" title="Extra spacing between characters, in millimeters (Orca's char gap)">Char gap (mm)
-                <input type="number" id="text-gap" min="-5" max="20" step="0.2" value="0" />
-              </label>
-              <label class="proj-opt" id="text-detail-wrap" style="display:none" title="Split triangles along glyph edges for crisp letters on coarse or lathe meshes. Above Off, this rebuilds geometry and clears undo history.">Detail
-                <select id="text-subdiv" class="proj-select">
-                  <option value="0">Off — whole triangles</option>
-                  <option value="2">Fine (2 rounds)</option>
-                  <option value="3">Finer (3 rounds)</option>
-                  <option value="4" selected>Finest (4 rounds)</option>
-                  <option value="5">Ultra (5 rounds — small text)</option>
-                </select>
-              </label>
-              <button id="btn-text-create">Create text decal</button>
-              <div id="text-place-actions" style="display:none">
-                <button id="btn-text-apply">Apply curved text</button>
-                <button id="btn-text-cancel">Cancel</button>
+              <p class="hint" id="tool-hint"></p>
+            </section>
+
+            <!-- ===== text ===== -->
+            <section class="panel-page" data-page="text" hidden>
+              <div id="text-decal">
+                <input type="text" id="text-input" placeholder="Type your text…" autocomplete="off" />
+                <div id="text-font-row">
+                  <select id="text-font" class="proj-select" title="Font family — click ⟳ to load your installed system fonts"></select>
+                  <button id="btn-text-fonts" class="btn" title="Load your installed system fonts (asks the browser's permission)">⟳</button>
+                </div>
+                <div id="text-style-row">
+                  <label title="Bold"><input type="checkbox" id="text-bold" /> Bold</label>
+                  <label title="Italic"><input type="checkbox" id="text-italic" /> Italic</label>
+                </div>
+                <label class="field" id="text-emboss-wrap" title="Paint the text as flat color, or emboss it as real 3D geometry: Raised stands it proud of the surface, Engraved cuts it in — the new faces are painted the active color.">Effect
+                  <select id="text-emboss" class="proj-select">
+                    <option value="off" selected>Paint — flat color</option>
+                    <option value="raise">Raised — 3D letters</option>
+                    <option value="engrave">Engraved — cut in</option>
+                  </select>
+                </label>
+                <label class="field" id="text-depth-wrap" style="display:none" title="How far the text rises above (Raised) or sinks below (Engraved) the surface, in millimeters">Depth (mm)
+                  <input type="number" id="text-depth" min="0.1" max="10" step="0.1" value="0.6" />
+                </label>
+                <label class="field" id="text-place-wrap" title="Drag on view: a decal pop-up you drag, resize and rotate over the model, then Apply — each letter lands on the surface under it. Wrap around model: click once on the model and the text wraps level around it (best for mugs and cylinders).">Placement
+                  <select id="text-place-mode" class="proj-select">
+                    <option value="decal" selected>Drag on view (decal)</option>
+                    <option value="wrap">Wrap around model (click)</option>
+                  </select>
+                </label>
+                <label class="field" id="text-height-wrap" title="Text line height on the model, in millimeters. In decal mode this follows the pop-up as you resize it — or type a size to set it.">Height (mm)
+                  <input type="number" id="text-height" min="1" max="200" step="0.5" value="10" />
+                </label>
+                <label class="field" id="text-rot-wrap" title="Rotate the text (decal mode) or tilt the level baseline in the surface plane (wrap mode)">Rotation
+                  <span class="field-row">
+                    <input type="range" id="text-rot" data-default="0" min="-180" max="180" step="1" value="0" />
+                    <span id="text-rot-val" class="opt-val">0°</span>
+                  </span>
+                </label>
+                <label class="field" id="text-align-wrap" style="display:none" title="Where the text sits relative to the click point">Align
+                  <select id="text-align" class="proj-select">
+                    <option value="center" selected>Center</option>
+                    <option value="left">Left</option>
+                    <option value="right">Right</option>
+                  </select>
+                </label>
+                <label class="field" id="text-gap-wrap" style="display:none" title="Extra spacing between characters, in millimeters (Orca's char gap)">Char gap (mm)
+                  <input type="number" id="text-gap" min="-5" max="20" step="0.2" value="0" />
+                </label>
+                <label class="field" id="text-detail-wrap" title="Split triangles along glyph edges for crisp letters on coarse or lathe meshes. Above Off, this rebuilds geometry and clears undo history.">Detail
+                  <select id="text-subdiv" class="proj-select">
+                    <option value="0">Off — whole triangles</option>
+                    <option value="2">Fine (2 rounds)</option>
+                    <option value="3">Finer (3 rounds)</option>
+                    <option value="4" selected>Finest (4 rounds)</option>
+                    <option value="5">Ultra (5 rounds — small text)</option>
+                  </select>
+                </label>
+                <button id="btn-text-create" class="btn btn-block">Add text</button>
+                <div id="text-place-actions" style="display:none">
+                  <button id="btn-text-apply" class="btn btn-primary">Apply</button>
+                  <button id="btn-text-cancel" class="btn">Cancel</button>
+                </div>
+                <p class="hint" id="text-place-hint" style="display:none">Click
+                once on the model to place the text; it wraps level around the
+                surface. Adjust Rotation, click again to reposition, then Apply.</p>
+                <p class="hint" id="text-hint"></p>
               </div>
-              <p class="hint" id="text-place-hint" style="display:none">Click
-              once on the model to place the text; it wraps level around the
-              surface. Adjust Rotation, click again to reposition, then Apply.</p>
-              <p class="hint" id="text-hint">Renders your text as a decal in the
-              active filament color. Position it over the model (drag / scroll /
-              corner handle), then Apply decal below. Works on flat and gently
-              curved faces.</p>
-            </div>
-            <div id="decal-controls" style="display:none">
-              <label class="proj-opt" title="Remove the image's solid background (flood-filled from the borders) so only the subject projects. Non-destructive — toggle off to restore.">
-                <input type="checkbox" id="decal-bg-remove" /> Remove background
-              </label>
-              <label class="proj-opt" id="bg-tol-wrap" style="display:none" title="How different a pixel may be from the border color and still count as background">BG tolerance
-                <input type="range" id="decal-bg-tol" data-default="40" min="5" max="120" step="5" value="40" />
-                <span id="decal-bg-tol-val">40</span>
-              </label>
-              <label class="proj-opt" id="bg-edge-wrap" style="display:none" title="Positive trims halo fringes off the subject's edge; negative keeps more of it">Edge trim
-                <input type="range" id="decal-bg-edge" data-default="0" min="-6" max="6" step="1" value="0" />
-                <span id="decal-bg-edge-val">0</span>
-              </label>
-              <label class="proj-opt">Scale
-                <input type="range" id="decal-scale" data-default="100" min="10" max="400" step="1" value="100" />
-                <span id="decal-scale-val">100%</span>
-              </label>
-              <label class="proj-opt">Rotation
-                <input type="range" id="decal-rot" data-default="0" min="-180" max="180" step="1" value="0" />
-                <span id="decal-rot-val">0°</span>
-              </label>
-              <label class="proj-opt">Opacity
-                <input type="range" id="decal-opacity" data-default="70" min="10" max="100" step="1" value="70" />
-              </label>
-              <label class="proj-opt" title="Split triangles along the decal's color boundaries for crisper edges than the mesh tessellation. Note: subdividing clears the undo history.">Detail
-                <select id="decal-subdiv" class="proj-select">
-                  <option value="0">Off — paint whole triangles</option>
-                  <option value="2">Fine (2 rounds)</option>
-                  <option value="3" selected>Finer (3 rounds)</option>
-                  <option value="4">Finest (4 rounds)</option>
-                  <option value="5">Ultra (5 rounds — small text)</option>
+            </section>
+
+            <!-- ===== image ===== -->
+            <section class="panel-page" data-page="image" hidden>
+              <div id="projection">
+                <h4 class="sec sec-first">Decal image</h4>
+                <button id="btn-decal-load" class="btn">Load image…</button>
+                <input type="file" id="decal-file" accept="image/png,image/jpeg,image/webp" hidden />
+                <div id="decal-controls" style="display:none">
+                  <label class="check" title="Remove the image's solid background (flood-filled from the borders) so only the subject projects. Non-destructive — toggle off to restore.">
+                    <input type="checkbox" id="decal-bg-remove" /> Remove background
+                  </label>
+                  <label class="field" id="bg-tol-wrap" style="display:none" title="How different a pixel may be from the border color and still count as background">BG tolerance
+                    <span class="field-row">
+                      <input type="range" id="decal-bg-tol" data-default="40" min="5" max="120" step="5" value="40" />
+                      <span id="decal-bg-tol-val" class="opt-val">40</span>
+                    </span>
+                  </label>
+                  <label class="field" id="bg-edge-wrap" style="display:none" title="Positive trims halo fringes off the subject's edge; negative keeps more of it">Edge trim
+                    <span class="field-row">
+                      <input type="range" id="decal-bg-edge" data-default="0" min="-6" max="6" step="1" value="0" />
+                      <span id="decal-bg-edge-val" class="opt-val">0</span>
+                    </span>
+                  </label>
+                  <label class="field">Scale
+                    <span class="field-row">
+                      <input type="range" id="decal-scale" data-default="100" min="10" max="400" step="1" value="100" />
+                      <span id="decal-scale-val" class="opt-val">100%</span>
+                    </span>
+                  </label>
+                  <label class="field">Rotation
+                    <span class="field-row">
+                      <input type="range" id="decal-rot" data-default="0" min="-180" max="180" step="1" value="0" />
+                      <span id="decal-rot-val" class="opt-val">0°</span>
+                    </span>
+                  </label>
+                  <label class="field">Opacity
+                    <span class="field-row">
+                      <input type="range" id="decal-opacity" data-default="70" min="10" max="100" step="1" value="70" />
+                    </span>
+                  </label>
+                  <label class="field" title="Split triangles along the decal's color boundaries for crisper edges than the mesh tessellation. Note: subdividing clears the undo history.">Detail
+                    <select id="decal-subdiv" class="proj-select">
+                      <option value="0">Off — paint whole triangles</option>
+                      <option value="2">Fine (2 rounds)</option>
+                      <option value="3" selected>Finer (3 rounds)</option>
+                      <option value="4">Finest (4 rounds)</option>
+                      <option value="5">Ultra (5 rounds — small text)</option>
+                    </select>
+                  </label>
+                  <button id="btn-decal-apply" class="btn btn-primary">Apply decal</button>
+                  <button id="btn-decal-remove" class="btn">Remove decal</button>
+                </div>
+                <p class="hint">Position the image over the model (drag it, corner
+                handle or scroll to resize), orbit the model behind it, then Apply.
+                Transparent PNG areas are skipped — perfect for logo decals.</p>
+                <h4 class="sec">Snapshot round-trip</h4>
+                <p class="hint">For AI-editing an exact view: save a snapshot,
+                recolor it with your filament colors, then import it.</p>
+                <button id="btn-proj-snapshot" class="btn">1. Save view snapshot</button>
+                <button id="btn-proj-return" class="btn" disabled title="Move the camera back to exactly where the snapshot was taken">↩ Return to snapshot view</button>
+                <button id="btn-proj-import" class="btn" disabled>2. Import edited image</button>
+                <input type="file" id="proj-file" accept="image/png,image/jpeg,image/webp" hidden />
+                <label class="check" title="Automatically add filament groups for the image's dominant colors, so the projection reproduces the image. Off = snap only to your existing groups.">
+                  <input type="checkbox" id="proj-auto-colors" checked /> Create colors from image
+                </label>
+                <label class="check" title="Brighten dark areas so a saturated color rendered too dark reads as that color. Leave OFF for logos with black areas — ON can turn compression noise in dark regions into colored speckle.">
+                  <input type="checkbox" id="proj-deshade" /> Recover dark colors
+                </label>
+                <label class="field" title="Max color distance for matching a pixel to a filament color">Color tolerance
+                  <span class="field-row">
+                    <input type="range" id="proj-tolerance" data-default="60" min="10" max="150" step="5" value="60" />
+                    <span id="proj-tolerance-val" class="opt-val">60</span>
+                  </span>
+                </label>
+                <label class="check" title="Only apply pixels that differ from the saved snapshot. Turn OFF for AI-regenerated images where every pixel shifts slightly.">
+                  <input type="checkbox" id="proj-changed-only" checked /> Only changed pixels
+                </label>
+                <p class="hint">The colors project back onto everything visible
+                from that view. Don't crop or rotate the image; resizing is fine.</p>
+              </div>
+            </section>
+
+            <!-- ===== colors ===== -->
+            <section class="panel-page" data-page="colors" hidden>
+              <div id="ams-presets">
+                <select id="ams-select" class="proj-select" title="Load a saved filament / AMS setup">
+                  <option value="">Saved setups…</option>
                 </select>
+                <button id="btn-ams-save" class="btn" title="Save the current groups as a reusable filament setup">Save…</button>
+                <button id="btn-ams-del" class="btn" title="Delete the selected saved setup" disabled>✕</button>
+              </div>
+              <div id="groups"></div>
+              <div id="group-add-row">
+                <button id="btn-add-group" class="btn">+ Add group</button>
+                <button id="btn-add-library" class="btn" title="Add a group by picking a real filament from the library">＋ From library</button>
+              </div>
+              <p class="hint">Click a group to paint with it (or pick one from the
+              color bar above the model). The number is the filament slot it's
+              assigned to in the slicer.</p>
+            </section>
+
+            <!-- ===== objects ===== -->
+            <section class="panel-page" data-page="objects" hidden>
+              <div id="object-list"></div>
+              <label class="check" title="Show the other objects as translucent context at their plate positions (relative to the object you're editing)">
+                <input type="checkbox" id="ghost-others" checked /> Ghost other objects
               </label>
-              <button id="btn-decal-apply">Apply decal</button>
-              <button id="btn-decal-remove">Remove decal</button>
-            </div>
-            <p class="hint">Position the image over the model (drag it, corner
-            handle or scroll to resize), orbit the model behind it, then Apply.
-            Transparent PNG areas are skipped — perfect for logo decals.</p>
-            <hr class="proj-sep" />
-            <p class="hint">Or the snapshot round-trip (for AI-editing an exact
-            view):</p>
-            <button id="btn-proj-snapshot">1. Save view snapshot</button>
-            <button id="btn-proj-return" disabled title="Move the camera back to exactly where the snapshot was taken">↩ Return to snapshot view</button>
-            <button id="btn-proj-import" disabled>2. Import edited image</button>
-            <input type="file" id="proj-file" accept="image/png,image/jpeg,image/webp" hidden />
-            <label class="proj-opt" title="Automatically add filament groups for the image's dominant colors, so the projection reproduces the image. Off = snap only to your existing groups.">
-              <input type="checkbox" id="proj-auto-colors" checked /> Create colors from image
-            </label>
-            <label class="proj-opt" title="Brighten dark areas so a saturated color rendered too dark reads as that color. Leave OFF for logos with black areas — ON can turn compression noise in dark regions into colored speckle.">
-              <input type="checkbox" id="proj-deshade" /> Recover dark colors
-            </label>
-            <label class="proj-opt" title="Max color distance for matching a pixel to a filament color">Color tolerance
-              <input type="range" id="proj-tolerance" data-default="60" min="10" max="150" step="5" value="60" />
-              <span id="proj-tolerance-val">60</span>
-            </label>
-            <label class="proj-opt" title="Only apply pixels that differ from the saved snapshot. Turn OFF for AI-regenerated images where every pixel shifts slightly.">
-              <input type="checkbox" id="proj-changed-only" checked /> Only changed pixels
-            </label>
-            <p class="hint">Save a snapshot, paint on it in any editor (or ask
-            an AI to recolor it) using your filament colors, then import it —
-            the colors project back onto everything visible from that view.
-            Don't crop or rotate the image; resizing is fine.</p>
+              <div id="object-actions">
+                <button id="btn-split-shells" class="btn" disabled title="Split the active object's disconnected shells into separate objects">Split into parts</button>
+                <button id="btn-arrange" class="btn" disabled title="Re-pack all objects into a tidy, non-overlapping grid on the plate">Auto-arrange</button>
+              </div>
+              <p class="hint">Each object is painted independently and shelved as you
+              switch. Click one to edit it; use <b>+ Append</b> (top bar) to add more
+              files. <b>Export 3MF</b> writes them all as one multi-object file.</p>
+            </section>
+
+            <!-- ===== printability ===== -->
+            <section class="panel-page" data-page="check" hidden>
+              <label class="field" title="Smallest colour patch (in mm) that will still print as a distinct colour. Painted regions narrower than this won't reproduce cleanly on an FDM printer — roughly a few nozzle widths.">Min feature (mm)
+                <span class="field-row">
+                  <input type="range" id="pf-size" data-default="2" min="0.4" max="6" step="0.1" value="2" />
+                  <span id="pf-size-val" class="opt-val">2.0</span>
+                </span>
+              </label>
+              <div id="pf-actions">
+                <button id="btn-pf-check" class="btn">Check active object</button>
+                <button id="btn-pf-fix" class="btn" disabled title="Absorb every flagged patch into its surrounding colour (one undoable step)">Fix flagged</button>
+                <button id="btn-pf-clear" class="btn" disabled title="Hide the highlight">Clear</button>
+              </div>
+              <p class="hint" id="pf-result">Highlights painted regions too small or
+              thin to print as a distinct colour, so you can grow or remove them
+              before export. <b>Fix flagged</b> absorbs them into the surrounding
+              colour.</p>
+            </section>
           </div>
-          </details>
         </aside>
       </main>
       <div id="statusbar">Open an STL to get started.</div>

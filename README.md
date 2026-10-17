@@ -22,6 +22,16 @@ exports double as project save files. Bambu/Orca-painted 3MFs import too
 are picked up when present). Your filament palette (names + colors) is
 remembered between sessions automatically.
 
+**Inside-out and badly wound STLs are repaired on import.** Some exporters
+write models inside-out (every face pointing in) or with patches of faces wound
+backwards; clicks would then land on the *far* side of the model, so brushes,
+fills, decals and text hit the wrong place. MultiPaint checks every shell as it
+loads: backwards patches are made consistent with their neighbors, and a shell
+whose volume comes out negative is turned right side out. Correct models are
+left untouched, flat or open surfaces are never flipped on a guess, and the
+status bar says when a repair was made. Big meshes are checked in a background
+worker.
+
 ### Install / offline
 
 MultiPaint is a PWA: from a `build` + `preview` (or any hosted deploy) the
@@ -80,6 +90,20 @@ Linux (AppImage) auto-update out of the box; **macOS auto-update needs the app
 to be code-signed** with an Apple Developer certificate — without signing, Mac
 users update by downloading the new `.dmg`.
 
+## Layout
+
+- **Rail (left)** — every tool and feature is a button: the paint tools
+  (Brush, Fill, Island, Blocker, Line), **Text** and **Image**, then **Colors**,
+  **Objects** and **Check** (printability).
+- **Settings panel (right)** — shows the settings for whatever you picked on the
+  rail: brush size and Mirror for the paint tools, the text options for Text,
+  and so on. Click the open item again (or ✕) to hide the panel and give the
+  model the whole width.
+- **Color bar (above the model)** — always visible: one chip per filament
+  group, so switching paint color is one click from any tool (or keys `1`–`9`).
+  **+** adds a color; **✎** opens the Colors panel to rename, pick from the
+  filament library, or load a saved setup.
+
 ## Controls
 
 | Input | Action |
@@ -92,6 +116,8 @@ users update by downloading the new `.dmg`.
 | Two fingers | Orbit (drag) + zoom (pinch) |
 | Pen pressure | Modulates brush size (harder = wider) |
 | `B` / `F` / `I` / `X` / `L` | Brush / Smart Fill / Island Fill / Blocker / Line |
+| `T` | Open / close the Text panel |
+| `Esc` | Cancel the text pop-up or a wrap placement |
 | Alt+drag | Erase (paint → base, blockers → removed) |
 | `Backspace` | Remove last line point (Line tool) |
 | `[` / `]` | Brush size |
@@ -153,7 +179,7 @@ taken — handy for checking the projection result or re-shooting.
   refinement.
 - **Despeckle** — absorbs tiny leftover paint islands (hidden residue from
   painting over a region) into their surrounding color.
-- **Mirror** (toolbar dropdown: Off / X / Y / Z) — symmetry painting. With an
+- **Mirror** (paint-tool settings: Off / X / Y / Z) — symmetry painting. With an
   axis chosen, the direct tools (Brush, Blocker, Line, Smart Fill, Island Fill)
   also apply the stroke to the mirror-image location across the model-center
   plane, so you paint both sides at once — great for characters, vehicles, any
@@ -213,9 +239,43 @@ only a nozzle-width wide won't reproduce — it smears or vanishes. The
 Only patches that border a *different* color count as features, so a whole
 one-color object is never flagged — just the detail that's too fine to print.
 
+## Text
+
+**Text** on the rail opens the text settings. Type your text, pick a font
+(the **⟳** button loads your installed system fonts via the browser's Local
+Font Access API — Chrome/Edge, asks permission; elsewhere you get a common-font
+list), optionally Bold/Italic, then choose an **Effect** and a **Placement**:
+
+| Effect | What it makes |
+|---|---|
+| **Paint** | Flat color on the surface, in the active filament (Detail sets edge crispness) |
+| **Raised** | Real 3D letters standing proud of the surface (Depth in mm), painted the active filament |
+| **Engraved** | Letters cut into the surface (Depth in mm), painted the active filament |
+
+| Placement | How you position it |
+|---|---|
+| **Drag on view (decal)** — default | **Add text** drops a **pop-up** over the model. Drag it, resize from the corner handle or scroll wheel, set **Rotation**, orbit the model behind it, then **Apply**. **Height (mm)** shows the text's real size on the model as you resize — or type a size to set it. Edits to the text, font or color update the pop-up live. |
+| **Wrap around model (click)** | **Place on model…**, then click **once** on the model: the text lays along a **level baseline that wraps around the model at constant height** (Orca's "use surface / per glyph") — ideal for mugs and cylinders. **Rotation** tilts the baseline, **Align** sets where it sits relative to the click, **Char gap** adds letter spacing; click again to reposition. |
+
+Either way each letter is placed **in its own surface tangent frame**, so text
+follows curves without smearing. In the pop-up, each letter lands on the
+surface directly under it; letters hanging off the model are skipped (the
+status bar says how many).
+
+**Raised / Engraved** build the letters as solids from the same glyph outlines
+and fuse them to the model with a watertight boolean (the
+[manifold](https://github.com/elalish/manifold) engine), so the result stays
+printable and exports in the 3MF painted per-triangle. Before the boolean the
+model is auto-repaired — welded, open holes filled, inside-out shells flipped —
+so imperfect STLs (lathe meshes with an open bottom, flipped shells) work; a
+genuinely non-manifold model may still be refused. The boolean runs in a
+background worker so the UI doesn't freeze. Like Detail subdivision, embossing
+rebuilds the mesh and clears the undo history. **Esc** or **Cancel** abandons a
+placement.
+
 ## Image projection
 
-Two ways to paint in 2D and apply in 3D (sidebar, bottom section):
+Two ways to paint in 2D and apply in 3D (**Image** on the rail):
 
 **Decal overlay (interactive, Primed3D-style, Recommended):** 
 
@@ -246,51 +306,6 @@ Two ways to paint in 2D and apply in 3D (sidebar, bottom section):
    export. Note: subdividing rebuilds the mesh and clears the undo history;
    set Detail to "Off" for a normal undoable apply.
 
-**Text decal:** type text, pick a font, optionally Bold/Italic, and **Create
-text decal** — the text is rasterized in the active filament color and dropped
-into the same overlay, so you position and **Apply** it exactly like an image
-decal (with the same Detail/subdivision for crisp letters). The font list
-starts with common families; the **⟳** button loads your actually-installed
-system fonts via the browser's Local Font Access API (Chrome/Edge, asks
-permission — falls back to the common list elsewhere). Best on flat and gently
-curved faces today; per-glyph wrap around cylinders is planned.
-
-**Curved text (per-glyph, "use surface"):** tick **Wrap on surface (per
-glyph)**, set a **Height (mm)**, click **Place curved text…**, then click
-**once** on the model to place the text and **Apply**. Like Orca's "use
-surface / per glyph", the text lays along a **level baseline that wraps around
-the model at constant height** — the advance direction is re-leveled to the
-horizontal surface tangent at every step, so it stays flat and upright on a
-cone or cylinder instead of drifting along a geodesic. Each glyph then projects
-in its own surface tangent frame, undistorted. **Rotation** tilts the baseline
-in the surface plane; click again to reposition; the preview updates live.
-**Align** (Center/Left/Right) sets where the text sits relative to the click
-point, and **Char gap** adds spacing between characters (Orca's char gap, in
-mm). **Detail** subdivides along the glyph edges for crisp letters on
-coarse/lathe meshes (like the decal Detail; above Off it rebuilds geometry and
-clears undo). Esc or **Cancel** aborts. Thin-stroke text wants Finest/Ultra;
-raise Height if letters come out chunky.
-
-**Embossed text (raised / engraved geometry):** everything above *paints* the
-surface; **Emboss** makes the text **real 3D geometry** instead. Set **Emboss**
-to **Raised** or **Engraved**, pick a **Depth (mm)** (default 0.6), type your
-text and font, click **Place raised/engraved text…**, click **once** on the
-model to place it (same level-baseline wrap as curved text — each glyph in its
-own surface frame, so it sits right on cones and cylinders), then **Apply**.
-Raised adds the letters standing proud of the surface; Engraved cuts them in —
-and either way the new faces are painted the active filament, so the emboss
-prints as its own color. This is the geometry-level version of Orca's emboss:
-the letters are built as solids (from the same glyph outlines the decal uses)
-and fused to the model with a watertight boolean (the
-[manifold](https://github.com/elalish/manifold) engine), so the result stays
-printable. Before the boolean the model is auto-repaired — welded, open holes
-filled, inside-out normals flipped — so even imperfect STLs (lathe/revolve
-meshes with an open bottom, or flipped shells) work; a genuinely non-manifold
-model may still be refused. The heavy boolean runs in a background worker so the
-UI doesn't freeze. Like Detail/subdivision, embossing rebuilds the mesh and
-clears undo history; the added/cut geometry exports in the 3MF like any other
-geometry, painted per-triangle.
-
 **Snapshot round-trip (for AI-editing an exact view, WIP):**
 
 1. Frame the model, then **Save view snapshot** — downloads a PNG and freezes
@@ -298,7 +313,7 @@ geometry, painted per-triangle.
    is rendered **flat-lit** (pure filament colors, no shading), so edits and
    re-import aren't polluted by shadows; it doubles as a coloring template.
 2. Edit the PNG anywhere — Photoshop, GIMP, or ask an AI image model to
-   recolor regions — using your filament colors from the sidebar. Don't crop
+   recolor regions — using your filament colors from the color bar. Don't crop
    or rotate; resizing is fine.
 3. **Import edited image** — same projection rules as the decal, applied from
    the saved pose.
@@ -380,6 +395,7 @@ land where they belong on the plate. Unpainted (Base) faces print on slot 1.
   helpers for the shelf
 - `src/filaments.js` — curated real-world filament catalog for the library picker
 - `src/meshcore.js` — pure per-triangle caches (adjacency, normals, centroids)
+  and `orientShells` (inside-out / mixed-winding repair on import)
 - `src/meshcache.js` + `src/meshcache.worker.js` — build those caches in a Web
   Worker for big meshes (import and post-subdivision rebuild) so the UI doesn't
   freeze; synchronous fallback for small meshes / non-worker environments
