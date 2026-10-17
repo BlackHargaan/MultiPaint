@@ -7,6 +7,7 @@ import { ProjectionSession, setDeshade } from './projection.js';
 import { removeBackground } from './imagebg.js';
 import { parse3MF } from './import3mf.js';
 import { rasterizeGlyphs, buildPlacements, buildTextClassifier, buildLevelBaseline, glyphsTotalMm } from './curvedtext.js';
+import { applyEmboss } from './emboss.js';
 import { idbSaveProject, idbLoadProject, idbClearProject, packProjectFile, unpackProjectFile } from './projectio.js';
 import { FILAMENTS, BRANDS, luminance } from './filaments.js';
 
@@ -925,7 +926,7 @@ document.getElementById('btn-text-create').addEventListener('click', async () =>
   const family = document.getElementById('text-font').value || 'sans-serif';
   // make sure the chosen font is actually loaded before we rasterize
   try { await document.fonts.load(`160px ${cssFontFamily(family)}`); } catch { /* generic/system font */ }
-  if (document.getElementById('text-wrap').checked) return startTextPlacement(text, family);
+  if (embossMode() !== 'off' || document.getElementById('text-wrap').checked) return startTextPlacement(text, family);
   const color = painter.groups[painter.activeGroup].color;
   const canvas = buildTextCanvas(
     text, family,
@@ -944,18 +945,32 @@ let textPlacing = false;
 let textAnchor = null;  // { point, tri } single placement click (Orca-style)
 let textLayout = null;  // pre-rasterized glyphs for the placement in progress
 
-document.getElementById('text-wrap').addEventListener('change', () => {
-  const on = document.getElementById('text-wrap').checked;
-  document.getElementById('text-height-wrap').style.display = on ? '' : 'none';
-  document.getElementById('text-rot-wrap').style.display = on ? '' : 'none';
-  document.getElementById('text-align-wrap').style.display = on ? '' : 'none';
-  document.getElementById('text-gap-wrap').style.display = on ? '' : 'none';
-  document.getElementById('text-detail-wrap').style.display = on ? '' : 'none';
-  document.getElementById('btn-text-create').textContent = on ? 'Place curved text…' : 'Create text decal';
-  document.getElementById('text-hint').textContent = on
-    ? 'Click once on the model to place text; it wraps level around the surface (Orca-style), each glyph in its own frame. Rotation tilts the baseline; Detail sets edge crispness.'
-    : 'Renders your text as a decal in the active filament color. Position it over the model, then Apply decal below. Works on flat and gently curved faces.';
-});
+/** Current emboss mode from the panel: 'off' | 'raise' | 'engrave'. */
+function embossMode() { return document.getElementById('text-emboss').value; }
+
+/** Show/hide the per-glyph placement controls based on Wrap + Emboss, and set
+ *  the button/hint copy. Placement mode = wrap OR emboss; emboss also needs a
+ *  depth and makes the Detail (paint-only subdivision) control irrelevant. */
+function updateTextModeUI() {
+  const emb = embossMode() !== 'off';
+  const place = document.getElementById('text-wrap').checked || emb;
+  document.getElementById('text-height-wrap').style.display = place ? '' : 'none';
+  document.getElementById('text-rot-wrap').style.display = place ? '' : 'none';
+  document.getElementById('text-align-wrap').style.display = place ? '' : 'none';
+  document.getElementById('text-gap-wrap').style.display = place ? '' : 'none';
+  document.getElementById('text-detail-wrap').style.display = (place && !emb) ? '' : 'none';
+  document.getElementById('text-depth-wrap').style.display = emb ? '' : 'none';
+  document.getElementById('btn-text-create').textContent =
+    emb ? (embossMode() === 'engrave' ? 'Place engraved text…' : 'Place raised text…')
+      : place ? 'Place curved text…' : 'Create text decal';
+  document.getElementById('text-hint').textContent = emb
+    ? 'Click once on the model to place the text, then Apply — it becomes real raised/engraved geometry painted in the active filament. (Rebuilds the mesh; clears undo.)'
+    : place
+      ? 'Click once on the model to place text; it wraps level around the surface (Orca-style), each glyph in its own frame. Rotation tilts the baseline; Detail sets edge crispness.'
+      : 'Renders your text as a decal in the active filament color. Position it over the model, then Apply decal below. Works on flat and gently curved faces.';
+}
+document.getElementById('text-wrap').addEventListener('change', updateTextModeUI);
+document.getElementById('text-emboss').addEventListener('change', updateTextModeUI);
 
 document.getElementById('text-rot').addEventListener('input', (e) => {
   document.getElementById('text-rot-val').textContent = e.target.value + '°';
@@ -977,8 +992,13 @@ function startTextPlacement(text, family) {
   document.getElementById('text-place-actions').style.display = '';
   document.getElementById('text-place-hint').style.display = '';
   document.getElementById('btn-text-create').style.display = 'none';
+  const emb = embossMode();
+  document.getElementById('btn-text-apply').textContent =
+    emb === 'raise' ? 'Apply raised' : emb === 'engrave' ? 'Apply engraved' : 'Apply curved text';
   viewer.clearPolylinePreview();
-  setStatus('Curved text: click once on the model to place the text, then "Apply curved text".');
+  setStatus(emb !== 'off'
+    ? 'Click once on the model to place the text, then Apply to emboss it.'
+    : 'Curved text: click once on the model to place the text, then "Apply curved text".');
 }
 
 /** Current curved-text options from the panel. */
@@ -1035,6 +1055,31 @@ document.getElementById('btn-text-apply').addEventListener('click', async () => 
   const baseline = currentTextBaseline();
   const placements = buildPlacements(textLayout, baseline, heightMm, painter.mesh, painter.triNormals, { charGapMm });
   if (!placements.length) return setStatus('No printable glyphs to place.');
+
+  const emb = embossMode();
+  if (emb !== 'off') {
+    const depthMm = parseFloat(document.getElementById('text-depth').value) || 0.6;
+    const g = painter.activeGroup, layout = textLayout, anchor = textAnchor;
+    const btn = document.getElementById('btn-text-apply');
+    btn.disabled = true;
+    setStatus(`Embossing text (${emb === 'engrave' ? 'engraved' : 'raised'})…`);
+    try {
+      const r = await applyEmboss(painter, placements, { mode: emb, depthMm });
+      setStatus(`Text ${emb === 'engrave' ? 'engraved' : 'raised'}: ${r.textFaces.toLocaleString()} new faces in ` +
+        `"${painter.groups[g].name}" — mesh now ${painter.triCount.toLocaleString()} triangles` +
+        `${r.filledLoops ? `, repaired ${r.filledLoops} open hole(s)` : ''} (undo history cleared).`);
+      markDirty();
+      endTextPlacement();
+    } catch (err) {
+      console.error(err);
+      setStatus(`Emboss failed: ${err.message}`);
+      textLayout = layout; textAnchor = anchor; // keep the placement so they can retry
+    } finally {
+      btn.disabled = false;
+    }
+    return;
+  }
+
   const group = painter.activeGroup;
   const { classify, inScope, triInScope } = buildTextClassifier(placements, group, heightMm);
   const subdivide = parseInt(document.getElementById('text-subdiv').value, 10);

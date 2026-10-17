@@ -12,6 +12,9 @@ export default defineConfig({
   server: {
     port: Number(process.env.PORT) || 5173,
   },
+  // manifold-3d ships a WASM glue module; let Vite serve it as-is rather than
+  // pre-bundling it with esbuild (which mangles the .wasm fetch).
+  optimizeDeps: { exclude: ['manifold-3d'] },
   plugins: electron ? [] : [
     VitePWA({
       registerType: 'autoUpdate',

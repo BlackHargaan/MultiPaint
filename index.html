@@ -203,6 +203,16 @@
                 <label title="Bold"><input type="checkbox" id="text-bold" /> Bold</label>
                 <label title="Italic"><input type="checkbox" id="text-italic" /> Italic</label>
               </div>
+              <label class="proj-opt" id="text-emboss-wrap" title="Emboss the text as real 3D geometry: Raised adds it on the surface, Engraved cuts it in — then paints those new faces the active filament. Off just paints (flat decal, or wrapped per-glyph below). You click once on the model to place it.">Emboss
+                <select id="text-emboss" class="proj-select">
+                  <option value="off" selected>Off (paint only)</option>
+                  <option value="raise">Raised</option>
+                  <option value="engrave">Engraved</option>
+                </select>
+              </label>
+              <label class="proj-opt" id="text-depth-wrap" style="display:none" title="How far embossed text rises above (Raised) or sinks below (Engraved) the surface, in millimeters">Depth (mm)
+                <input type="number" id="text-depth" min="0.1" max="10" step="0.1" value="0.6" />
+              </label>
               <label class="proj-opt" title="Wrap the text around the surface, projecting each glyph in its own surface tangent frame — for cylinders (mugs, coolers) where a flat decal would smear. You then click points on the model to lay the baseline.">
                 <input type="checkbox" id="text-wrap" /> Wrap on surface (per glyph)
               </label>

@@ -25,6 +25,7 @@
   "dependencies": {
     "electron-updater": "^6.3.9",
     "fflate": "^0.8.3",
+    "manifold-3d": "^3.5.4",
     "three": "^0.184.0",
     "three-mesh-bvh": "^0.9.10"
   }
