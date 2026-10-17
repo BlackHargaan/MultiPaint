@@ -93,7 +93,7 @@ export function repair(soup) {
 /**
  * Run the emboss boolean. `wasm` is an initialised manifold-3d module.
  *   modelSoup : Float32Array, 9 floats/triangle (the current mesh)
- *   glyphs    : [{ polys:[[ [x,y],... ], ...], mat:[12 floats col-major 3x4] }]
+ *   glyphs    : [{ polys:[[ [x,y],... ], ...], mat:[16 floats col-major 4x4 (Mat4)] }]
  *   depthMm   : extrusion depth
  *   mode      : 'raise' | 'engrave'
  * Returns { positions:Float32Array soup, isText:Uint8Array per triangle, filledLoops }.

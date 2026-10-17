@@ -1,4 +1,5 @@
 import './style.css';
+import * as THREE from 'three';
 import { Viewer } from './viewer.js';
 import { Painter, connectedComponents } from './painter.js';
 import { buildMeshCachesAsync } from './meshcache.js';
@@ -485,6 +486,56 @@ window.addEventListener('pagehide', saveNow);
 // ---- tools ----
 
 const toolButtons = document.querySelectorAll('.tool');
+// ---- rail + right-hand settings panel ----
+// Every tool and feature is a rail button; its settings show in the panel on
+// the right. Clicking the open item again hides the panel (more room to paint).
+
+const TOOL_TITLES = { brush: 'Brush', fill: 'Smart Fill', island: 'Island Fill', blocker: 'Blocker', line: 'Line' };
+const PANEL_TITLES = { text: 'Text', image: 'Image', colors: 'Colors', objects: 'Objects', check: 'Printability check' };
+const TOOL_HINTS = {
+  brush: 'Brush: drag to paint, Alt-drag to erase back to base.',
+  blocker: 'Blocker: drag to paint fill barriers, Alt-drag to erase them.',
+  fill: 'Smart Fill: click to fill, keep the button held and drag right/left to grow/shrink the fill.',
+  island: 'Island Fill: click a shell to fill all of it with the active color.',
+  line: 'Line: click to drop points, Backspace removes the last one. Commit with "Paint line" or "Block line".',
+};
+let panelPage = 'paint';
+
+function panelIsOpen() { return !document.getElementById('panel').hidden; }
+
+function syncRail() {
+  const open = panelIsOpen();
+  document.querySelectorAll('#toolrail .rail-btn').forEach((b) =>
+    b.classList.toggle('open', open && b.dataset.panel === panelPage));
+  document.querySelectorAll('#toolrail .tool').forEach((b) =>
+    b.classList.toggle('open', open && panelPage === 'paint' && b.dataset.tool === tool));
+}
+
+function showPanel(page) {
+  panelPage = page;
+  document.getElementById('panel').hidden = false;
+  document.querySelectorAll('.panel-page').forEach((sec) => { sec.hidden = sec.dataset.page !== page; });
+  document.getElementById('panel-title').textContent =
+    page === 'paint' ? (TOOL_TITLES[tool] || 'Paint') : PANEL_TITLES[page];
+  syncRail();
+}
+
+function hidePanel() {
+  document.getElementById('panel').hidden = true;
+  syncRail();
+}
+
+function togglePanel(page) {
+  if (panelIsOpen() && panelPage === page) hidePanel();
+  else showPanel(page);
+}
+
+document.querySelectorAll('#toolrail .rail-btn').forEach((b) =>
+  b.addEventListener('click', () => togglePanel(b.dataset.panel)));
+document.getElementById('btn-panel-close').addEventListener('click', hidePanel);
+// the canvas must follow the viewport as the panel opens/closes
+new ResizeObserver(() => viewer.resize()).observe(document.getElementById('viewport'));
+
 function setTool(name) {
   tool = name;
   toolButtons.forEach((b) => b.classList.toggle('active', b.dataset.tool === name));
@@ -497,12 +548,17 @@ function setTool(name) {
   document.getElementById('line-width-wrap').style.display = name === 'line' ? '' : 'none';
   document.getElementById('line-surface-wrap').style.display = name === 'line' ? '' : 'none';
   document.getElementById('line-actions').style.display = name === 'line' ? '' : 'none';
-  if (name === 'brush') setStatus('Brush: drag to paint, Alt-drag to erase back to base.');
-  if (name === 'blocker') setStatus('Blocker: drag to paint fill barriers, Alt-drag to erase them.');
-  if (name === 'fill') setStatus('Smart Fill: click to fill, keep the button held and drag right/left to grow/shrink the fill.');
-  if (name === 'line') setStatus('Line: click to drop points, Backspace removes the last one. Commit with "Paint line" or "Block line".');
+  setStatus(TOOL_HINTS[name]);
+  document.getElementById('tool-hint').textContent = TOOL_HINTS[name];
+  if (panelPage === 'paint') document.getElementById('panel-title').textContent = TOOL_TITLES[name];
+  syncRail();
 }
-toolButtons.forEach((b) => b.addEventListener('click', () => setTool(b.dataset.tool)));
+toolButtons.forEach((b) => b.addEventListener('click', () => {
+  // picking a tool opens its settings; clicking the open tool again hides them
+  const again = panelIsOpen() && panelPage === 'paint' && b.dataset.tool === tool;
+  setTool(b.dataset.tool);
+  if (again) hidePanel(); else showPanel('paint');
+}));
 setTool('brush');
 
 document.getElementById('brush-size').addEventListener('input', (e) => {
@@ -727,7 +783,12 @@ document.getElementById('btn-ortho').addEventListener('click', () => {
 const decalOv = document.getElementById('decal-overlay');
 const decal = { img: null, x: 40, y: 40, w: 320, h: 240, baseW: 320, rot: 0 };
 window.__mp.decal = decal;
+window.__mp.textPlacements = () => (textOverlay ? overlayPlacements() : null);
 let decalDrag = null; // { mode: 'move'|'resize', dx, dy }
+// The overlay is shared by the Image panel (decal images) and the Text panel
+// (text pop-up). textOverlay is the text pop-up's glyph layout while it owns
+// the overlay, else null.
+let textOverlay = null; // { canvas, layout, pad, xs }
 
 function positionDecal() {
   decalOv.style.left = decal.x + 'px';
@@ -736,6 +797,7 @@ function positionDecal() {
   decalOv.style.height = decal.h + 'px';
   decalOv.style.transformOrigin = 'center center';
   decalOv.style.transform = `rotate(${decal.rot}deg)`;
+  if (textOverlay) syncTextHeightFromOverlay();
 }
 
 function resetDecal() {
@@ -825,6 +887,7 @@ document.getElementById('btn-decal-load').addEventListener('click', () => {
 /** Show a loaded image/text bitmap in the decal overlay, wiring the existing
  *  background-removal + apply controls. */
 async function presentDecal(originalImg, originalUrl, statusMsg) {
+  if (textOverlay) hideTextOverlay();
   decal.originalImg = originalImg;
   decal.originalUrl = originalUrl;
   // fresh image, fresh choices — a stale toggle from a previous image can
@@ -894,94 +957,343 @@ function cssFontFamily(family) {
   return GENERIC_FONTS.includes(family) ? family : JSON.stringify(family);
 }
 
-/** Rasterize text to a transparent canvas, filled in the active filament
- *  color, ready to feed the decal projection pipeline. */
-function buildTextCanvas(text, family, bold, italic, color) {
-  const fontSize = 160; // high raster res; on-model size is set by the overlay
-  const font = `${italic ? 'italic ' : ''}${bold ? 'bold ' : ''}${fontSize}px ${cssFontFamily(family)}`;
-  const meas = document.createElement('canvas').getContext('2d');
-  meas.font = font;
-  const lines = text.split('\n');
-  let maxW = 1;
-  for (const ln of lines) maxW = Math.max(maxW, meas.measureText(ln).width);
-  const lineH = fontSize * 1.28;
-  const pad = fontSize * 0.28;
-  const canvas = document.createElement('canvas');
-  canvas.width = Math.ceil(maxW + pad * 2);
-  canvas.height = Math.ceil(lineH * lines.length + pad * 2);
-  const ctx = canvas.getContext('2d');
-  ctx.font = font;
-  ctx.textBaseline = 'top';
-  ctx.textAlign = 'center';
-  ctx.fillStyle = color;
-  for (let i = 0; i < lines.length; i++) {
-    ctx.fillText(lines[i], canvas.width / 2, pad + i * lineH);
-  }
-  return canvas;
+/** Text placement: 'decal' (drag a pop-up over the view) | 'wrap' (click once
+ *  on the model and the text wraps level around it). */
+function placeMode() { return document.getElementById('text-place-mode').value; }
+/** Text effect: 'off' (paint) | 'raise' | 'engrave'. */
+function embossMode() { return document.getElementById('text-emboss').value; }
+
+function currentTextStyle() {
+  return {
+    text: document.getElementById('text-input').value.trim(),
+    family: document.getElementById('text-font').value || 'sans-serif',
+    bold: document.getElementById('text-bold').checked,
+    italic: document.getElementById('text-italic').checked,
+  };
 }
 
 document.getElementById('btn-text-create').addEventListener('click', async () => {
-  const text = document.getElementById('text-input').value.trim();
+  const { text, family } = currentTextStyle();
   if (!text) return setStatus('Type some text first.');
-  const family = document.getElementById('text-font').value || 'sans-serif';
+  if (!painter.mesh) return setStatus('Open a model first.');
   // make sure the chosen font is actually loaded before we rasterize
   try { await document.fonts.load(`160px ${cssFontFamily(family)}`); } catch { /* generic/system font */ }
-  if (embossMode() !== 'off' || document.getElementById('text-wrap').checked) return startTextPlacement(text, family);
-  const color = painter.groups[painter.activeGroup].color;
-  const canvas = buildTextCanvas(
-    text, family,
-    document.getElementById('text-bold').checked,
-    document.getElementById('text-italic').checked,
-    color
-  );
-  const bmp = await createImageBitmap(canvas);
-  await presentDecal(bmp, canvas.toDataURL(),
-    `Text decal created in "${painter.groups[painter.activeGroup].name}" — position it over the model, then Apply decal.`);
+  if (placeMode() === 'wrap') return startTextPlacement(text, family);
+  presentTextOverlay();
 });
 
-// ---- curved (per-glyph "use surface") text ----
+// ---- text pop-up (drag-on-view decal placement) ----
+
+/** Rasterize the text one glyph at a time — the same per-glyph layout the
+ *  emboss/curved paths use — onto a padded transparent canvas in the active
+ *  color, so what you see in the pop-up is exactly where each letter lands. */
+function buildTextOverlay({ text, family, bold, italic }) {
+  const layout = rasterizeGlyphs(text, { family, bold, italic });
+  const fontPx = 160;
+  const pad = Math.ceil(fontPx * 0.28);
+  const xs = [];
+  let total = 0;
+  for (const g of layout.glyphs) { xs.push(total); total += g.advancePx; }
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.ceil(total + pad * 2));
+  canvas.height = layout.lineHpx + pad * 2;
+  const ctx = canvas.getContext('2d');
+  ctx.font = `${italic ? 'italic ' : ''}${bold ? 'bold ' : ''}${fontPx}px ${cssFontFamily(family)}`;
+  ctx.textBaseline = 'top';
+  ctx.textAlign = 'left';
+  ctx.fillStyle = painter.groups[painter.activeGroup].color;
+  [...text].forEach((ch, i) => { if (layout.glyphs[i]?.mask) ctx.fillText(ch, pad + xs[i], pad); });
+  return { canvas, layout, pad, xs };
+}
+
+function showOverlayCanvas(canvas) {
+  decal.img = canvas;
+  document.getElementById('decal-img').src = canvas.toDataURL();
+}
+
+/** Show the text pop-up centered on the view, sized to the Height field. */
+function presentTextOverlay() {
+  if (textPlacing) endTextPlacement();
+  // take the overlay over from any image decal
+  if (decal.originalUrl) URL.revokeObjectURL(decal.originalUrl);
+  decal.originalImg = null;
+  decal.originalUrl = null;
+  document.getElementById('decal-controls').style.display = 'none';
+
+  // read the requested size first: resetDecal() re-syncs the Height field
+  // from the pop-up's default on-screen size
+  const wantMm = parseFloat(document.getElementById('text-height').value) || 10;
+  textOverlay = buildTextOverlay(currentTextStyle());
+  showOverlayCanvas(textOverlay.canvas);
+  decalOv.style.display = 'block';
+  decalOv.style.opacity = 0.9;
+  resetDecal();
+  decal.rot = parseFloat(document.getElementById('text-rot').value) || 0;
+  const sized = setOverlayHeightMm(wantMm);
+  positionDecal();
+  document.getElementById('btn-text-create').style.display = 'none';
+  document.getElementById('text-place-actions').style.display = '';
+  setStatus(sized
+    ? 'Text pop-up placed — drag it, resize from the corner (or scroll), then Apply. Orbit the model behind it as needed.'
+    : 'Drag the text pop-up over the model, resize from the corner (or scroll), then Apply.');
+}
+
+/** Re-render the pop-up after a text/font/color change, keeping its on-screen
+ *  scale, center and rotation. */
+function refreshTextOverlay() {
+  if (!textOverlay) return;
+  const style = currentTextStyle();
+  if (!style.text) return;
+  const scale = decal.w / textOverlay.canvas.width; // screen px per canvas px
+  const cx = decal.x + decal.w / 2, cy = decal.y + decal.h / 2;
+  textOverlay = buildTextOverlay(style);
+  showOverlayCanvas(textOverlay.canvas);
+  decal.w = textOverlay.canvas.width * scale;
+  decal.h = textOverlay.canvas.height * scale;
+  decal.x = cx - decal.w / 2;
+  decal.y = cy - decal.h / 2;
+  positionDecal();
+}
+
+function hideTextOverlay() {
+  textOverlay = null;
+  decal.img = null;
+  decalOv.style.display = 'none';
+  document.getElementById('text-place-actions').style.display = 'none';
+  document.getElementById('btn-text-create').style.display = '';
+}
+
+/** Client-px center of the pop-up and its rotation as a unit "right" vector. */
+function overlayScreenFrame() {
+  const vr = viewport.getBoundingClientRect();
+  const a = (decal.rot * Math.PI) / 180;
+  return { cx: vr.left + decal.x + decal.w / 2, cy: vr.top + decal.y + decal.h / 2, c: Math.cos(a), s: Math.sin(a) };
+}
+
+/** Screen position of each visible glyph's center in the pop-up. */
+function overlayGlyphScreenPoints() {
+  const t = textOverlay;
+  const { cx, cy, c, s } = overlayScreenFrame();
+  const cw = t.canvas.width, ch = t.canvas.height;
+  const pts = [];
+  t.layout.glyphs.forEach((g, i) => {
+    if (!g.mask) return;
+    const lx = ((t.pad + t.xs[i] + g.w / 2) / cw - 0.5) * decal.w;
+    const ly = ((t.pad + g.h / 2) / ch - 0.5) * decal.h;
+    pts.push({ g, sx: cx + lx * c - ly * s, sy: cy + lx * s + ly * c });
+  });
+  return pts;
+}
+
+/**
+ * Surface frame under a screen point: hit point P, outward normal N (facing
+ * the camera), tangent T along the given screen direction, B = N×T (screen
+ * up), and the surface size of one screen pixel there. null if it misses.
+ */
+function surfaceFrameAt(sx, sy, dirX, dirY) {
+  const hit = viewer.pick({ clientX: sx, clientY: sy });
+  if (!hit || !painter.triNormals) return null;
+  const camera = viewer.camera;
+  const f = hit.faceIndex;
+  const P = hit.point.clone();
+  const N = new THREE.Vector3(painter.triNormals[f * 3], painter.triNormals[f * 3 + 1], painter.triNormals[f * 3 + 2]);
+  const view = camera.isPerspectiveCamera
+    ? P.clone().sub(camera.position)
+    : new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+  if (N.dot(view) > 0) N.negate();
+  // one screen pixel along dir, unprojected at the hit's depth
+  const rect = viewer.renderer.domElement.getBoundingClientRect();
+  const ndc = P.clone().project(camera);
+  const R = new THREE.Vector3(
+    ((sx + dirX - rect.left) / rect.width) * 2 - 1,
+    -((sy + dirY - rect.top) / rect.height) * 2 + 1,
+    ndc.z
+  ).unproject(camera).sub(P);
+  const mmPerPx = R.length();
+  const T = R.addScaledVector(N, -R.dot(N));
+  if (mmPerPx < 1e-9 || T.lengthSq() < 1e-12) return null;
+  T.normalize();
+  const B = new THREE.Vector3().crossVectors(N, T).normalize();
+  return { P, N, T, B, mmPerPx };
+}
+
+/** Surface size of one screen px under the pop-up (center, else any letter). */
+function overlayMmPerPx() {
+  if (!textOverlay || !painter.mesh) return null;
+  const { cx, cy, c, s } = overlayScreenFrame();
+  const at = surfaceFrameAt(cx, cy, c, s);
+  if (at) return at.mmPerPx;
+  for (const p of overlayGlyphScreenPoints()) {
+    const f = surfaceFrameAt(p.sx, p.sy, c, s);
+    if (f) return f.mmPerPx;
+  }
+  return null;
+}
+
+/** Keep the Height field showing the pop-up's real size on the model. */
+function syncTextHeightFromOverlay() {
+  const mmPerPx = overlayMmPerPx();
+  if (!mmPerPx) return;
+  const mm = textOverlay.layout.lineHpx * (decal.w / textOverlay.canvas.width) * mmPerPx;
+  const el = document.getElementById('text-height');
+  if (document.activeElement !== el) el.value = mm.toFixed(1);
+}
+
+/** Resize the pop-up (about its center) so the text is `mm` tall on the model.
+ *  Returns false when the pop-up isn't over the model (size unknown). */
+function setOverlayHeightMm(mm) {
+  const mmPerPx = overlayMmPerPx();
+  if (!mmPerPx || !(mm > 0)) return false;
+  const t = textOverlay;
+  const cx = decal.x + decal.w / 2, cy = decal.y + decal.h / 2;
+  decal.w = (mm * t.canvas.width) / (t.layout.lineHpx * mmPerPx);
+  decal.h = (decal.w * t.canvas.height) / t.canvas.width;
+  decal.x = cx - decal.w / 2;
+  decal.y = cy - decal.h / 2;
+  positionDecal();
+  return true;
+}
+
+/**
+ * Per-glyph surface placements from the pop-up: each letter lands on the
+ * surface under its own center, in that spot's tangent frame, turned by the
+ * pop-up's rotation — so text follows curves without smearing (Orca's "use
+ * surface"). One shared scale keeps every letter the same height.
+ */
+function overlayPlacements() {
+  const t = textOverlay;
+  const { c, s } = overlayScreenFrame();
+  const hits = [];
+  let missed = 0;
+  for (const { g, sx, sy } of overlayGlyphScreenPoints()) {
+    const f = surfaceFrameAt(sx, sy, c, s);
+    if (f) hits.push({ g, ...f }); else missed++;
+  }
+  if (!hits.length) return { placements: [], missed };
+  const scales = hits.map((h) => h.mmPerPx).sort((a, b) => a - b);
+  const mmPerCanvasPx = scales[scales.length >> 1] * (decal.w / t.canvas.width);
+  const placements = hits.map(({ g, P, N, T, B }) => ({
+    P, N, T, B,
+    halfW: (g.w * mmPerCanvasPx) / 2,
+    halfH: (g.h * mmPerCanvasPx) / 2,
+    mask: g.mask, w: g.w, h: g.h,
+  }));
+  return { placements, missed };
+}
+
+/** Apply the text pop-up: flat paint via decal projection, or raised/engraved
+ *  geometry via per-glyph placements. */
+async function applyTextOverlay() {
+  if (!painter.mesh) return setStatus('Open a model first.');
+  const emb = embossMode();
+  const btn = document.getElementById('btn-text-apply');
+  const group = painter.activeGroup;
+  btn.disabled = true;
+  try {
+    if (emb === 'off') {
+      const subdivide = parseInt(document.getElementById('text-subdiv').value, 10);
+      const ov = { cx: decal.x + decal.w / 2, cy: decal.y + decal.h / 2, w: decal.w, h: decal.h, rotDeg: decal.rot };
+      setStatus('Applying text…');
+      // subdivision rebuilds the geometry, so it cannot be captured as an undo stroke
+      if (!subdivide) painter.beginStroke();
+      const c = await projection.applyDecal(painter, viewer, decal.img, ov, {
+        tolerance: 60,
+        subdivide,
+        autoPalette: false,
+        onProgress: (f, phase) => setStatus(`Applying text — ${phase} ${Math.round(f * 100)}%…`),
+      });
+      if (!subdivide) painter.endStroke();
+      if (!c.applied) {
+        setStatus('The text didn’t land on any triangles — drag it over the model, or raise Detail for small text.');
+        return;
+      }
+      setStatus(`Text painted in "${painter.groups[group].name}": ${c.applied} triangles` +
+        (subdivide ? ` — mesh now ${painter.triCount.toLocaleString()} triangles (undo history cleared).` : ' (Ctrl+Z to undo).'));
+    } else {
+      const { placements, missed } = overlayPlacements();
+      if (!placements.length) {
+        setStatus('None of the letters are over the model — drag the text onto it first.');
+        return;
+      }
+      const depthMm = parseFloat(document.getElementById('text-depth').value) || 0.6;
+      const verb = emb === 'engrave' ? 'engraved' : 'raised';
+      setStatus(`Embossing text (${verb})…`);
+      const r = await applyEmboss(painter, placements, { mode: emb, depthMm });
+      setStatus(`Text ${verb}: ${r.textFaces.toLocaleString()} new faces in "${painter.groups[group].name}" — ` +
+        `mesh now ${painter.triCount.toLocaleString()} triangles` +
+        `${r.filledLoops ? `, repaired ${r.filledLoops} open hole(s)` : ''}` +
+        `${missed ? `; ${missed} letter(s) were off the model and skipped` : ''} (undo history cleared).`);
+    }
+    markDirty();
+    hideTextOverlay();
+  } catch (err) {
+    console.error(err);
+    setStatus(`Text failed: ${err.message}`);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// live edits re-render the pop-up
+document.getElementById('text-input').addEventListener('input', refreshTextOverlay);
+['text-font', 'text-bold', 'text-italic'].forEach((id) =>
+  document.getElementById(id).addEventListener('change', async () => {
+    if (!textOverlay) return;
+    const fam = document.getElementById('text-font').value || 'sans-serif';
+    try { await document.fonts.load(`160px ${cssFontFamily(fam)}`); } catch { /* generic */ }
+    refreshTextOverlay();
+  }));
+
+// ---- curved (per-glyph "use surface") text: wrap-around placement ----
 
 let textPlacing = false;
 let textAnchor = null;  // { point, tri } single placement click (Orca-style)
 let textLayout = null;  // pre-rasterized glyphs for the placement in progress
 
-/** Current emboss mode from the panel: 'off' | 'raise' | 'engrave'. */
-function embossMode() { return document.getElementById('text-emboss').value; }
-
-/** Show/hide the per-glyph placement controls based on Wrap + Emboss, and set
- *  the button/hint copy. Placement mode = wrap OR emboss; emboss also needs a
- *  depth and makes the Detail (paint-only subdivision) control irrelevant. */
+/** Show the controls each Effect × Placement combination needs, and set the
+ *  button/hint copy. */
 function updateTextModeUI() {
-  const emb = embossMode() !== 'off';
-  const place = document.getElementById('text-wrap').checked || emb;
-  document.getElementById('text-height-wrap').style.display = place ? '' : 'none';
-  document.getElementById('text-rot-wrap').style.display = place ? '' : 'none';
-  document.getElementById('text-align-wrap').style.display = place ? '' : 'none';
-  document.getElementById('text-gap-wrap').style.display = place ? '' : 'none';
-  document.getElementById('text-detail-wrap').style.display = (place && !emb) ? '' : 'none';
-  document.getElementById('text-depth-wrap').style.display = emb ? '' : 'none';
-  document.getElementById('btn-text-create').textContent =
-    emb ? (embossMode() === 'engrave' ? 'Place engraved text…' : 'Place raised text…')
-      : place ? 'Place curved text…' : 'Create text decal';
-  document.getElementById('text-hint').textContent = emb
-    ? 'Click once on the model to place the text, then Apply — it becomes real raised/engraved geometry painted in the active filament. (Rebuilds the mesh; clears undo.)'
-    : place
-      ? 'Click once on the model to place text; it wraps level around the surface (Orca-style), each glyph in its own frame. Rotation tilts the baseline; Detail sets edge crispness.'
-      : 'Renders your text as a decal in the active filament color. Position it over the model, then Apply decal below. Works on flat and gently curved faces.';
+  const emb = embossMode();
+  const wrap = placeMode() === 'wrap';
+  const show = (id, on) => { document.getElementById(id).style.display = on ? '' : 'none'; };
+  show('text-depth-wrap', emb !== 'off');
+  show('text-detail-wrap', emb === 'off');
+  show('text-align-wrap', wrap);
+  show('text-gap-wrap', wrap);
+  document.getElementById('btn-text-create').textContent = wrap ? 'Place on model…' : 'Add text';
+  document.getElementById('btn-text-apply').textContent =
+    emb === 'raise' ? 'Apply raised' : emb === 'engrave' ? 'Apply engraved' : 'Apply';
+  const what = emb === 'off'
+    ? 'painted in the active color'
+    : `${emb === 'engrave' ? 'engraved into' : 'raised from'} the surface as real geometry in the active color (rebuilds the mesh; clears undo)`;
+  document.getElementById('text-hint').textContent = wrap
+    ? `Click once on the model to place the text — it wraps level around the surface (Orca-style), each letter in its own frame — then Apply. It's ${what}.`
+    : `Add text drops a pop-up over the model: drag it, resize from the corner or scroll, set Rotation, then Apply. Each letter lands on the surface under it, ${what}.`;
 }
-document.getElementById('text-wrap').addEventListener('change', updateTextModeUI);
 document.getElementById('text-emboss').addEventListener('change', updateTextModeUI);
+document.getElementById('text-place-mode').addEventListener('change', () => {
+  // switching placement abandons a placement in progress
+  if (textOverlay) hideTextOverlay();
+  if (textPlacing) endTextPlacement();
+  updateTextModeUI();
+});
+updateTextModeUI();
 
 document.getElementById('text-rot').addEventListener('input', (e) => {
   document.getElementById('text-rot-val').textContent = e.target.value + '°';
+  if (textOverlay) { decal.rot = parseFloat(e.target.value) || 0; positionDecal(); }
   refreshTextBaseline();
 });
 document.getElementById('text-align').addEventListener('change', refreshTextBaseline);
 document.getElementById('text-gap').addEventListener('input', refreshTextBaseline);
-document.getElementById('text-height').addEventListener('input', refreshTextBaseline);
+document.getElementById('text-height').addEventListener('input', (e) => {
+  if (textOverlay) setOverlayHeightMm(parseFloat(e.target.value));
+  refreshTextBaseline();
+});
 
 function startTextPlacement(text, family) {
   if (!painter.mesh) return setStatus('Open a model first.');
+  if (textOverlay) hideTextOverlay();
   textLayout = rasterizeGlyphs(text, {
     family,
     bold: document.getElementById('text-bold').checked,
@@ -1043,11 +1355,13 @@ function endTextPlacement() {
 }
 
 document.getElementById('btn-text-cancel').addEventListener('click', () => {
+  if (textOverlay) { hideTextOverlay(); setStatus('Text cancelled.'); return; }
   endTextPlacement();
   setStatus('Curved text cancelled.');
 });
 
 document.getElementById('btn-text-apply').addEventListener('click', async () => {
+  if (textOverlay) return applyTextOverlay();
   if (!textPlacing || !textAnchor) {
     return setStatus('Click once on the model to place the text first.');
   }
@@ -1405,6 +1719,12 @@ window.addEventListener('keydown', (e) => {
     e.preventDefault();
     return;
   }
+  if (e.key === 'Escape' && textOverlay) {
+    hideTextOverlay();
+    setStatus('Text cancelled.');
+    e.preventDefault();
+    return;
+  }
   if (e.key === 'Escape' && textPlacing) {
     endTextPlacement();
     setStatus('Curved text cancelled.');
@@ -1417,6 +1737,7 @@ window.addEventListener('keydown', (e) => {
   if (k === 'i') setTool('island');
   if (k === 'x') setTool('blocker');
   if (k === 'l') setTool('line');
+  if (k === 't' && !e.ctrlKey && !e.metaKey) togglePanel('text');
   if (e.key === 'Backspace' && tool === 'line' && linePoints.length) {
     removeLastLinePoint();
     setStatus(`Removed last point — ${linePoints.length} left${lineRedo.length ? ' (Ctrl+Y to restore)' : ''}.`);
@@ -1704,8 +2025,50 @@ function renderGroups() {
 
     groupsEl.append(row);
   });
+  renderPalette();
+  refreshTextOverlay(); // a live text pop-up follows the active color
   savePalette();
   markDirty();
+}
+
+/** The always-visible color bar above the model: one chip per filament group
+ *  (click to paint with it), plus quick add / manage. */
+function renderPalette() {
+  const wrap = document.getElementById('palette-chips');
+  wrap.innerHTML = '';
+  painter.groups.forEach((g, i) => {
+    const chip = document.createElement('button');
+    chip.className = 'pchip' + (i === painter.activeGroup ? ' active' : '');
+    chip.style.background = g.color;
+    chip.title = `${i + 1} · ${g.name}${i < 9 ? ` — key ${i + 1}` : ''}`;
+    const num = document.createElement('span');
+    num.className = 'pnum';
+    num.textContent = i + 1;
+    num.style.color = luminance(g.color) > 0.6 ? 'rgba(0,0,0,0.7)' : 'rgba(255,255,255,0.85)';
+    chip.append(num);
+    chip.addEventListener('click', () => {
+      painter.activeGroup = i;
+      renderGroups();
+    });
+    wrap.append(chip);
+  });
+  const add = document.createElement('button');
+  add.className = 'pchip-add';
+  add.textContent = '+';
+  add.title = 'Add a color';
+  add.addEventListener('click', () => document.getElementById('btn-add-group').click());
+  const edit = document.createElement('button');
+  edit.className = 'pchip-edit';
+  edit.textContent = '✎';
+  edit.title = 'Manage colors — names, filament library, saved setups';
+  edit.addEventListener('click', () => showPanel('colors'));
+  wrap.append(add, edit);
+
+  const label = document.getElementById('palette-name');
+  label.textContent = 'Painting with ';
+  const b = document.createElement('b');
+  b.textContent = painter.groups[painter.activeGroup].name;
+  label.append(b);
 }
 
 document.getElementById('btn-add-group').addEventListener('click', () => {

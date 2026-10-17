@@ -66,17 +66,22 @@ function glyphPolys(p) {
   ]));
 }
 
-/** 3x4 column-major placement matrix: columns T, B, N, origin. Local Z (extrude
- *  axis) maps to the surface normal; the glyph straddles the surface by EPS so
- *  the boolean overlaps (raise protrudes outward, engrave digs inward). */
+/** 4x4 column-major placement matrix (manifold-3d's Mat4 — 16 floats; the
+ *  last row is ignored): columns T, B, N, origin. Local Z (extrude axis) maps to
+ *  the surface normal; the glyph straddles the surface by EPS so the boolean
+ *  overlaps (raise protrudes outward, engrave digs inward). */
 function glyphMatrix(p, depthMm, mode) {
   const { P, N, T, B } = p;
   const zShift = mode === 'engrave' ? -depthMm : -EPS_MM;
   const tgt = mode === 'engrave'
     ? { x: P.x + N.x * EPS_MM, y: P.y + N.y * EPS_MM, z: P.z + N.z * EPS_MM }
     : P;
-  return [T.x, T.y, T.z, B.x, B.y, B.z, N.x, N.y, N.z,
-    tgt.x + N.x * zShift, tgt.y + N.y * zShift, tgt.z + N.z * zShift];
+  return [
+    T.x, T.y, T.z, 0,
+    B.x, B.y, B.z, 0,
+    N.x, N.y, N.z, 0,
+    tgt.x + N.x * zShift, tgt.y + N.y * zShift, tgt.z + N.z * zShift, 1,
+  ];
 }
 
 // ---- old-face group lookup (preserve existing paint on model faces) ----
